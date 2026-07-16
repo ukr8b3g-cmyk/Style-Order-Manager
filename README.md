@@ -11,7 +11,7 @@ Style Order Manager was created around one simple idea: keep each style on a com
 ## Compatibility
 
 - Forge Neo: verified in the current development environment
-- ReForge: expected to work; verification is pending
+- ReForge: verified
 - Automatic1111: built on the standard extension APIs; not verified yet
 
 ## Features
@@ -60,6 +60,8 @@ Restart the WebUI after installation.
 4. Press **Save** to write the new order and edits to `styles.csv`.
 
 The CSV header is preserved as `name,prompt,negative_prompt`.
+
+After saving, press the standard **Styles refresh button** (the circular-arrow button) in the WebUI to reload the updated styles into the prompt UI. If necessary, use **Reload list** in Style Order Manager as well.
 
 ## Backup and restore
 
