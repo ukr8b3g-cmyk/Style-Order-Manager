@@ -63,6 +63,12 @@ CSVヘッダーは`name,prompt,negative_prompt`のまま維持されます。
 
 保存後は、WebUI本体のStyles欄にある**更新（リフレッシュ）ボタン**（円形矢印のボタン）を押すと、変更したスタイル一覧がプロンプト画面へ反映されます。必要に応じて、Style Order Managerの**Reload list**も使用してください。
 
+### プロンプト編集画面を開く
+
+WebUIのプロンプト操作欄にある**鉛筆アイコン**を押すと、プロンプト／スタイルの編集画面が開きます。
+
+![鉛筆アイコンから開くプロンプト編集画面](docs/images/prompt-editor.png)
+
 ## バックアップとリストア
 
 バックアップは初期値ON、10件保持です。標準の相対パスは次のとおりです。
@@ -82,6 +88,7 @@ style-order-manager/
 ├─ javascript/style_order_manager.js
 ├─ scripts/style_order_manager.py
 ├─ docs/images/extensions-tab.png
+├─ docs/images/prompt-editor.png
 ├─ style.css
 ├─ README.md
 ├─ README_ja.md

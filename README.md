@@ -63,6 +63,12 @@ The CSV header is preserved as `name,prompt,negative_prompt`.
 
 After saving, press the standard **Styles refresh button** (the circular-arrow button) in the WebUI to reload the updated styles into the prompt UI. If necessary, use **Reload list** in Style Order Manager as well.
 
+### Open the prompt editor
+
+Press the **pencil button** in the WebUI prompt controls to open the prompt/style editing screen.
+
+![Open the prompt editor from the pencil button](docs/images/prompt-editor.png)
+
 ## Backup and restore
 
 Backups are enabled by default and retain 10 files. The standard relative path is:
@@ -82,6 +88,7 @@ style-order-manager/
 ├─ javascript/style_order_manager.js
 ├─ scripts/style_order_manager.py
 ├─ docs/images/extensions-tab.png
+├─ docs/images/prompt-editor.png
 ├─ style.css
 ├─ README.md
 ├─ README_ja.md
