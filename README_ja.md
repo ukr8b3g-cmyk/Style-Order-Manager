@@ -2,7 +2,11 @@
 
 [English README](README.md)
 
+![WebUIのExtensionsタブに表示したStyle Order Manager](docs/images/extensions-tab.png)
+
 Forge Neo、ReForge、その他のAutomatic1111系WebUIで使える、`styles.csv`の並び順管理ツールです。ドラッグ＆ドロップによる順番変更を主機能にしています。
+
+Style Order Managerは、大量の`styles.csv`でも各スタイルをコンパクトな一行表示で見やすくし、順番変更を軽快に行えることを重視して作りました。検索、編集、追加、削除、保存、バックアップ、リストアなど最低限必要な機能に絞った軽量ツールで、高度な管理機能はあえて多く搭載していません。
 
 ## 対応状況
 
@@ -75,6 +79,7 @@ styles_backups
 style-order-manager/
 ├─ javascript/style_order_manager.js
 ├─ scripts/style_order_manager.py
+├─ docs/images/extensions-tab.png
 ├─ style.css
 ├─ README.md
 ├─ README_ja.md

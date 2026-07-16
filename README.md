@@ -2,7 +2,11 @@
 
 [日本語 README](README_ja.md)
 
+![Style Order Manager in the WebUI Extensions tab](docs/images/extensions-tab.png)
+
 A compact style order manager for Forge Neo and compatible Automatic1111-style WebUI forks. It manages `styles.csv` with a focus on drag-and-drop reordering.
+
+Style Order Manager was created around one simple idea: keep each style on a compact, easy-to-scan single line so reordering a large `styles.csv` stays quick and comfortable. It is intentionally lightweight and includes the minimum practical features—search, edit, add, delete, save, backup, and restore—without trying to be an advanced style-management suite.
 
 ## Compatibility
 
@@ -75,6 +79,7 @@ Before a restore, the current `styles.csv` is saved as a safety backup. Old back
 style-order-manager/
 ├─ javascript/style_order_manager.js
 ├─ scripts/style_order_manager.py
+├─ docs/images/extensions-tab.png
 ├─ style.css
 ├─ README.md
 ├─ README_ja.md
