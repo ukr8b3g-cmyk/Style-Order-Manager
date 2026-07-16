@@ -8,6 +8,8 @@ A compact style order manager for Forge Neo and compatible Automatic1111-style W
 
 Style Order Manager was created around one simple idea: keep each style on a compact, easy-to-scan single line so reordering a large `styles.csv` stays quick and comfortable. It is intentionally lightweight and includes the minimum practical features—search, edit, add, delete, save, backup, and restore—without trying to be an advanced style-management suite.
 
+It was also created because a large `styles.csv` becomes difficult to understand and maintain when edited directly in a text editor. This focused UI keeps the order and contents easy to scan without becoming a feature-heavy editor.
+
 ## Compatibility
 
 - Forge Neo: verified in the current development environment
