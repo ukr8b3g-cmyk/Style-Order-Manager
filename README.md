@@ -64,7 +64,7 @@ Restart the WebUI after installation.
 
 The CSV header is preserved as `name,prompt,negative_prompt`.
 
-After saving, press the standard **Styles refresh button** (the circular-arrow button) in the WebUI to reload the updated styles into the prompt UI. If necessary, use **Reload list** in Style Order Manager as well.
+After saving, Style Order Manager automatically refreshes the WebUI's Styles lists. If a compatible fork does not expose the standard refresh control, use its Styles refresh button manually.
 
 ### Open the prompt editor
 

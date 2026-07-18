@@ -42,8 +42,6 @@
             backupCount: "{count}件",
             backupNote: "「今すぐバックアップ」は保存済みの styles.csv をコピーします（未保存の編集は含みません）。標準保存先: styles_backups。リストア時は現在の styles.csv も安全用に退避します。",
             backupListError: "取得エラー",
-            positive: "ポジティブ",
-            negative: "ネガティブ",
             delete: "削除",
             dragTitle: "ドラッグして並べ替え",
             moveUp: "1段上へ移動",
@@ -59,7 +57,6 @@
             styleName: "スタイル名",
             positivePrompt: "ポジティブプロンプト",
             negativePrompt: "ネガティブプロンプト",
-            emptyValue: "（空）",
             unsetStyleName: "（名称未設定）",
             noMatches: "検索条件に一致するスタイルがありません。",
             reloadConfirm: "未保存の変更を破棄して styles.csv を再読込しますか？",
@@ -115,8 +112,6 @@
             backupCount: "{count} files",
             backupNote: "Back up now copies the saved styles.csv (unsaved edits are not included). Default: styles_backups. During restore, the current styles.csv is also saved as a safety backup.",
             backupListError: "Could not load",
-            positive: "Positive",
-            negative: "Negative",
             delete: "Delete",
             dragTitle: "Drag to reorder",
             moveUp: "Move up one step",
@@ -132,7 +127,6 @@
             styleName: "Style name",
             positivePrompt: "Positive prompt",
             negativePrompt: "Negative prompt",
-            emptyValue: "(empty)",
             unsetStyleName: "(unnamed)",
             noMatches: "No styles match the search.",
             reloadConfirm: "Discard unsaved changes and reload styles.csv?",
@@ -309,11 +303,6 @@
         updateSummary();
     }
 
-    function previewText(value) {
-        const text = String(value ?? "").replaceAll("\r\n", "\n").replaceAll("\r", "\n");
-        return escapeHtml(text || t("emptyValue"));
-    }
-
     function cardMarkup(style, index) {
         const expanded = state.expanded.has(style.id);
         const promptId = `style-editor-prompt-${style.id}`;
@@ -330,16 +319,6 @@
                         <button type="button" class="style-editor-toggle" data-action="toggle" title="${escapeHtml(t(expanded ? "collapse" : "expand"))}" aria-label="${escapeHtml(t(expanded ? "collapse" : "expand"))}" aria-expanded="${expanded}">${expanded ? "▼" : "▶"}</button>
                         <strong>${escapeHtml(style.name || t("unsetStyleName"))}</strong>
                         <button type="button" class="style-editor-delete" data-action="delete">${escapeHtml(t("delete"))}</button>
-                    </div>
-                    <div class="style-editor-preview-grid">
-                        <section>
-                            <div class="style-editor-field-label">${escapeHtml(t("positive"))}</div>
-                            <div class="style-editor-preview" data-preview="prompt">${previewText(style.prompt)}</div>
-                        </section>
-                        <section>
-                            <div class="style-editor-field-label">${escapeHtml(t("negative"))}</div>
-                            <div class="style-editor-preview" data-preview="negative_prompt">${previewText(style.negative_prompt)}</div>
-                        </section>
                     </div>
                     <div class="style-editor-fields">
                         <label>${escapeHtml(t("styleName"))}<input type="text" data-field="name" value="${escapeHtml(style.name)}" autocomplete="off"></label>
@@ -668,8 +647,6 @@
             style[field] = value;
             const textarea = card.querySelector(`[data-field="${field}"]`);
             if (textarea) textarea.value = value;
-            const preview = card.querySelector(`[data-preview="${field}"]`);
-            if (preview) preview.innerHTML = previewText(value);
             markDirty();
             flashClipboardButton(button, t("pasted"));
         } catch (error) {
@@ -716,8 +693,6 @@
             const style = state.styles[index];
             if (!style) return;
             style[field] = event.target.value;
-            const preview = card.querySelector(`[data-preview="${field === "negative_prompt" ? "negative_prompt" : "prompt"}"]`);
-            if (preview) preview.innerHTML = previewText(event.target.value);
             markDirty();
         });
 

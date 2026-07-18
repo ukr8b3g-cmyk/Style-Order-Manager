@@ -64,7 +64,7 @@ git clone https://github.com/ukr8b3g-cmyk/Style-Order-Manager.git <webui-directo
 
 CSVヘッダーは`name,prompt,negative_prompt`のまま維持されます。
 
-保存後は、WebUI本体のStyles欄にある**更新（リフレッシュ）ボタン**（円形矢印のボタン）を押すと、変更したスタイル一覧がプロンプト画面へ反映されます。必要に応じて、Style Order Managerの**Reload list**も使用してください。
+保存後は、Style Order ManagerがWebUI本体のStyles一覧を自動更新します。標準の更新ボタンを公開していない互換WebUIでは、Styles欄の更新ボタンを手動で使用してください。
 
 ### プロンプト編集画面を開く
 
