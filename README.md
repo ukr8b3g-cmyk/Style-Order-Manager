@@ -2,7 +2,7 @@
 
 [日本語 README](README_ja.md)
 
-![Style Order Manager in the WebUI Extensions tab](docs/images/extensions-tab.png)
+![Style Order Manager tab in the WebUI](docs/images/extensions-tab.png)
 
 A compact style order manager for Forge Neo and compatible Automatic1111-style WebUI forks. It manages `styles.csv` with a focus on drag-and-drop reordering.
 
