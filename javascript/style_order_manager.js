@@ -24,9 +24,13 @@
             statusLoading: "styles.csv を再読込しています...",
             statusLoaded: "{file} を読み込みました。",
             statusReadError: "読込エラー: {message}",
-            help: "カードをクリックすると展開します。左端の ☷ をドラッグして並び順を変更できます。編集内容は「保存」するまで styles.csv に反映されません。",
+            help: "↑↓で1段ずつ移動、☷をドラッグして並べ替え、▶で編集欄を展開します。編集内容は「保存」するまで styles.csv に反映されません。",
             backupSettings: "バックアップ設定",
             backupEnabled: "保存時にバックアップを作成",
+            backupNow: "今すぐバックアップ",
+            backingUp: "保存済みの styles.csv をバックアップしています...",
+            backupCreated: "バックアップを作成しました: {file}",
+            backupCreateError: "バックアップ作成エラー: {message}",
             keepCount: "残す件数",
             countUnit: "件",
             folderLabel: "保存先",
@@ -36,12 +40,22 @@
             noBackups: "バックアップなし",
             restore: "リストア",
             backupCount: "{count}件",
-            backupNote: "標準保存先: styles_backups（styles.csv と同じフォルダ内）。相対パスは styles.csv と同じフォルダ基準です。リストア時は現在の styles.csv を安全用バックアップにしてから置き換えます。",
+            backupNote: "「今すぐバックアップ」は保存済みの styles.csv をコピーします（未保存の編集は含みません）。標準保存先: styles_backups。リストア時は現在の styles.csv も安全用に退避します。",
             backupListError: "取得エラー",
             positive: "ポジティブ",
             negative: "ネガティブ",
             delete: "削除",
             dragTitle: "ドラッグして並べ替え",
+            moveUp: "1段上へ移動",
+            moveDown: "1段下へ移動",
+            expand: "編集欄を開く",
+            collapse: "編集欄を閉じる",
+            copy: "コピー",
+            paste: "貼り付け",
+            copied: "コピー済み",
+            pasted: "貼付済み",
+            clipboardWriteError: "コピーできませんでした: {message}",
+            clipboardReadError: "貼り付けできませんでした: {message}",
             styleName: "スタイル名",
             positivePrompt: "ポジティブプロンプト",
             negativePrompt: "ネガティブプロンプト",
@@ -61,7 +75,8 @@
             saveError: "保存エラー: {message}",
             backupMessage: " バックアップ: {file}",
             restartNeeded: " Forgeの再起動が必要です。",
-            restartNotNeeded: " Forgeの再起動は通常不要です。既存画面のスタイル欄は画面再読込で反映できます。",
+            stylesRefreshed: " Styles一覧を自動更新しました。",
+            stylesRefreshManual: " Styles一覧は既存画面の更新ボタンで反映できます。",
             savedMessage: "保存しました。",
             emptyStyleName: "{index}番目のスタイル名が空です。",
             duplicateStyle: "スタイル名が重複しています: {name}",
@@ -82,9 +97,13 @@
             statusLoading: "Reloading styles.csv...",
             statusLoaded: "Loaded {file}.",
             statusReadError: "Read error: {message}",
-            help: "Click a card to expand it. Drag the ☷ handle on the left to reorder. Changes are not written to styles.csv until you press Save.",
+            help: "Use ↑↓ to move one step, drag ☷ to reorder, and use ▶ to expand the editor. Changes are not written to styles.csv until you press Save.",
             backupSettings: "Backup settings",
             backupEnabled: "Create a backup when saving",
+            backupNow: "Back up now",
+            backingUp: "Backing up the saved styles.csv...",
+            backupCreated: "Created backup: {file}",
+            backupCreateError: "Backup error: {message}",
             keepCount: "Keep",
             countUnit: "files",
             folderLabel: "Folder",
@@ -94,12 +113,22 @@
             noBackups: "No backups",
             restore: "Restore",
             backupCount: "{count} files",
-            backupNote: "Default: styles_backups (next to styles.csv). Relative paths use the styles.csv folder. During restore, the current styles.csv is backed up before replacement.",
+            backupNote: "Back up now copies the saved styles.csv (unsaved edits are not included). Default: styles_backups. During restore, the current styles.csv is also saved as a safety backup.",
             backupListError: "Could not load",
             positive: "Positive",
             negative: "Negative",
             delete: "Delete",
             dragTitle: "Drag to reorder",
+            moveUp: "Move up one step",
+            moveDown: "Move down one step",
+            expand: "Open editor",
+            collapse: "Close editor",
+            copy: "Copy",
+            paste: "Paste",
+            copied: "Copied",
+            pasted: "Pasted",
+            clipboardWriteError: "Could not copy: {message}",
+            clipboardReadError: "Could not paste: {message}",
             styleName: "Style name",
             positivePrompt: "Positive prompt",
             negativePrompt: "Negative prompt",
@@ -119,7 +148,8 @@
             saveError: "Save error: {message}",
             backupMessage: " Backup: {file}",
             restartNeeded: " Forge must be restarted.",
-            restartNotNeeded: " Forge usually does not need a restart. Reload the existing page to update its style list.",
+            stylesRefreshed: " Refreshed the Styles lists automatically.",
+            stylesRefreshManual: " Use the refresh button on an existing Styles panel to update its list.",
             savedMessage: "Saved.",
             emptyStyleName: "Style {index} has an empty name.",
             duplicateStyle: "Duplicate style name: {name}",
@@ -149,6 +179,7 @@
         dirty: false,
         busy: false,
         draggingId: null,
+        suppressToggleUntil: 0,
         backups: [],
     };
 
@@ -207,9 +238,8 @@
     }
 
     function updateBackupControls() {
-        const enabled = root.querySelector("#style-editor-backup-enabled");
         const count = root.querySelector("#style-editor-backup-count");
-        count.disabled = !enabled.checked;
+        count.disabled = false;
     }
 
     function applyLanguage() {
@@ -222,6 +252,7 @@
         root.querySelector("#style-editor-help").textContent = t("help");
         root.querySelector("#style-editor-settings-title").textContent = t("backupSettings");
         root.querySelector("#style-editor-backup-enabled-label").textContent = t("backupEnabled");
+        root.querySelector("#style-editor-backup-now").textContent = t("backupNow");
         root.querySelector("#style-editor-keep-label").textContent = t("keepCount");
         root.querySelector("#style-editor-count-unit").textContent = t("countUnit");
         root.querySelector("#style-editor-folder-label").textContent = t("folderLabel");
@@ -262,7 +293,7 @@
             const button = root.querySelector(selector);
             if (button) button.disabled = busy || (selector === "#style-editor-save" && !state.dirty);
         });
-        ["#style-editor-browse-backup", "#style-editor-reset-backup", "#style-editor-backups-refresh"].forEach((selector) => {
+        ["#style-editor-backup-now", "#style-editor-browse-backup", "#style-editor-reset-backup", "#style-editor-backups-refresh"].forEach((selector) => {
             const button = root.querySelector(selector);
             if (button) button.disabled = busy;
         });
@@ -285,14 +316,18 @@
 
     function cardMarkup(style, index) {
         const expanded = state.expanded.has(style.id);
+        const promptId = `style-editor-prompt-${style.id}`;
+        const negativePromptId = `style-editor-negative-prompt-${style.id}`;
         return `
             <article class="style-editor-card ${expanded ? "is-expanded" : ""}" data-index="${index}" data-id="${escapeHtml(style.id)}">
                 <div class="style-editor-card-side">
-                    <span class="style-editor-drag-handle" draggable="true" data-drag-handle="true" title="${escapeHtml(t("dragTitle"))}" aria-label="${escapeHtml(t("dragTitle"))}">☷</span>
-                    <span class="style-editor-order">${index + 1}</span>
+                    <button type="button" class="style-editor-move-button" data-action="move-up" title="${escapeHtml(t("moveUp"))}" aria-label="${escapeHtml(t("moveUp"))}" ${index === 0 ? "disabled" : ""}>↑</button>
+                    <button type="button" class="style-editor-move-button" data-action="move-down" title="${escapeHtml(t("moveDown"))}" aria-label="${escapeHtml(t("moveDown"))}" ${index === state.styles.length - 1 ? "disabled" : ""}>↓</button>
+                    <button type="button" class="style-editor-drag-handle" draggable="true" data-drag-handle="true" title="${escapeHtml(t("dragTitle"))}" aria-label="${escapeHtml(t("dragTitle"))}"><span aria-hidden="true">☷</span><span class="style-editor-order">${index + 1}</span></button>
                 </div>
                 <div class="style-editor-card-body">
                     <div class="style-editor-card-heading">
+                        <button type="button" class="style-editor-toggle" data-action="toggle" title="${escapeHtml(t(expanded ? "collapse" : "expand"))}" aria-label="${escapeHtml(t(expanded ? "collapse" : "expand"))}" aria-expanded="${expanded}">${expanded ? "▼" : "▶"}</button>
                         <strong>${escapeHtml(style.name || t("unsetStyleName"))}</strong>
                         <button type="button" class="style-editor-delete" data-action="delete">${escapeHtml(t("delete"))}</button>
                     </div>
@@ -308,8 +343,26 @@
                     </div>
                     <div class="style-editor-fields">
                         <label>${escapeHtml(t("styleName"))}<input type="text" data-field="name" value="${escapeHtml(style.name)}" autocomplete="off"></label>
-                        <label>${escapeHtml(t("positivePrompt"))}<textarea data-field="prompt" rows="4">${escapeHtml(style.prompt)}</textarea></label>
-                        <label>${escapeHtml(t("negativePrompt"))}<textarea data-field="negative_prompt" rows="4">${escapeHtml(style.negative_prompt)}</textarea></label>
+                        <div class="style-editor-field-group">
+                            <div class="style-editor-field-heading">
+                                <label for="${escapeHtml(promptId)}">${escapeHtml(t("positivePrompt"))}</label>
+                                <div class="style-editor-clipboard-actions">
+                                    <button type="button" class="style-editor-copy" data-action="copy" data-clipboard-field="prompt">${escapeHtml(t("copy"))}</button>
+                                    <button type="button" class="style-editor-paste" data-action="paste" data-clipboard-field="prompt">${escapeHtml(t("paste"))}</button>
+                                </div>
+                            </div>
+                            <textarea id="${escapeHtml(promptId)}" data-field="prompt" rows="4">${escapeHtml(style.prompt)}</textarea>
+                        </div>
+                        <div class="style-editor-field-group">
+                            <div class="style-editor-field-heading">
+                                <label for="${escapeHtml(negativePromptId)}">${escapeHtml(t("negativePrompt"))}</label>
+                                <div class="style-editor-clipboard-actions">
+                                    <button type="button" class="style-editor-copy" data-action="copy" data-clipboard-field="negative_prompt">${escapeHtml(t("copy"))}</button>
+                                    <button type="button" class="style-editor-paste" data-action="paste" data-clipboard-field="negative_prompt">${escapeHtml(t("paste"))}</button>
+                                </div>
+                            </div>
+                            <textarea id="${escapeHtml(negativePromptId)}" data-field="negative_prompt" rows="4">${escapeHtml(style.negative_prompt)}</textarea>
+                        </div>
                     </div>
                 </div>
             </article>`;
@@ -393,6 +446,31 @@
         setStatus(t("folderReset"), "success");
     }
 
+    async function createBackupNow() {
+        const countInput = root.querySelector("#style-editor-backup-count");
+        const folderInput = root.querySelector("#style-editor-backup-folder");
+        const backupCount = Math.min(100, Math.max(1, Number(countInput.value) || 10));
+        const backupFolder = folderInput.value.trim() || DEFAULT_BACKUP_FOLDER;
+        countInput.value = backupCount;
+        folderInput.value = backupFolder;
+        persistSettings();
+        setBusy(true);
+        setStatus(t("backingUp"), "working");
+        try {
+            const data = await request("/backup", {
+                method: "POST",
+                body: JSON.stringify({ backup_folder: backupFolder, backup_count: backupCount }),
+            });
+            await loadBackups();
+            setStatus(t("backupCreated", { file: data.backup_file }), "success");
+        } catch (error) {
+            setStatus(t("backupCreateError", { message: error.message }), "error");
+        } finally {
+            setBusy(false);
+            updateSummary();
+        }
+    }
+
     async function restoreBackup() {
         const select = root.querySelector("#style-editor-backup-select");
         const backupName = select.value;
@@ -453,6 +531,12 @@
         return "";
     }
 
+    function refreshForgeStyleControls() {
+        const refreshButtons = [...document.querySelectorAll('[id^="refresh_"][id$="_styles"]')];
+        refreshButtons.forEach((button) => button.click());
+        return refreshButtons.length;
+    }
+
     async function saveStyles() {
         const validationError = validateStyles();
         if (validationError) {
@@ -485,7 +569,10 @@
             state.dirty = false;
             render();
             const backupMessage = data.backup_file ? t("backupMessage", { file: data.backup_file }) : "";
-            const reloadMessage = data.restart_required ? t("restartNeeded") : t("restartNotNeeded");
+            const refreshedControls = data.restart_required ? 0 : refreshForgeStyleControls();
+            const reloadMessage = data.restart_required
+                ? t("restartNeeded")
+                : t(refreshedControls ? "stylesRefreshed" : "stylesRefreshManual");
             setStatus(`${t("savedMessage")}${backupMessage}${reloadMessage}`, "success");
         } catch (error) {
             setStatus(t("saveError", { message: error.message }), "error");
@@ -526,6 +613,70 @@
         render();
     }
 
+    function moveStyleOneStep(index, offset) {
+        const targetIndex = index + offset;
+        if (index < 0 || targetIndex < 0 || targetIndex >= state.styles.length) return;
+        const [moved] = state.styles.splice(index, 1);
+        state.styles.splice(targetIndex, 0, moved);
+        markDirty();
+        render();
+    }
+
+    function collapseExpandedCardsForDrag(list) {
+        if (!state.expanded.size) return;
+        state.expanded.clear();
+        list.querySelectorAll(".style-editor-card.is-expanded").forEach((card) => {
+            card.classList.remove("is-expanded");
+            const toggle = card.querySelector('[data-action="toggle"]');
+            if (!toggle) return;
+            toggle.textContent = "▶";
+            toggle.setAttribute("aria-expanded", "false");
+            toggle.setAttribute("aria-label", t("expand"));
+            toggle.title = t("expand");
+        });
+    }
+
+    function autoScrollDuringDrag(clientY) {
+        const edge = 72;
+        const maxStep = 24;
+        let step = 0;
+        if (clientY < edge) step = -Math.min(maxStep, Math.ceil((edge - clientY) / 3));
+        else if (clientY > window.innerHeight - edge) step = Math.min(maxStep, Math.ceil((clientY - (window.innerHeight - edge)) / 3));
+        if (step) window.scrollBy(0, step);
+    }
+
+    function flashClipboardButton(button, label) {
+        button.textContent = label;
+        window.setTimeout(() => {
+            if (!button.isConnected) return;
+            button.textContent = t(button.dataset.action);
+        }, 1000);
+    }
+
+    async function copyStyleField(style, field, button) {
+        try {
+            await navigator.clipboard.writeText(style[field] || "");
+            flashClipboardButton(button, t("copied"));
+        } catch (error) {
+            setStatus(t("clipboardWriteError", { message: error.message }), "error");
+        }
+    }
+
+    async function pasteStyleField(style, field, card, button) {
+        try {
+            const value = await navigator.clipboard.readText();
+            style[field] = value;
+            const textarea = card.querySelector(`[data-field="${field}"]`);
+            if (textarea) textarea.value = value;
+            const preview = card.querySelector(`[data-preview="${field}"]`);
+            if (preview) preview.innerHTML = previewText(value);
+            markDirty();
+            flashClipboardButton(button, t("pasted"));
+        } catch (error) {
+            setStatus(t("clipboardReadError", { message: error.message }), "error");
+        }
+    }
+
     function bindEvents() {
         const list = root.querySelector("#style-editor-list");
         root.querySelector("#style-editor-search").addEventListener("input", (event) => {
@@ -550,6 +701,7 @@
         backupCount.addEventListener("input", persistSettings);
         backupFolder.addEventListener("input", persistSettings);
         backupFolder.addEventListener("change", loadBackups);
+        root.querySelector("#style-editor-backup-now").addEventListener("click", createBackupNow);
         root.querySelector("#style-editor-browse-backup").addEventListener("click", browseBackupFolder);
         root.querySelector("#style-editor-reset-backup").addEventListener("click", resetBackupFolder);
         root.querySelector("#style-editor-backups-refresh").addEventListener("click", loadBackups);
@@ -569,14 +721,17 @@
             markDirty();
         });
 
-        list.addEventListener("click", (event) => {
+        list.addEventListener("click", async (event) => {
             const card = event.target.closest(".style-editor-card");
             if (!card) return;
             const index = Number(card.dataset.index);
             const style = state.styles[index];
             if (!style) return;
+            const actionButton = event.target.closest("[data-action]");
+            if (!actionButton) return;
+            const action = actionButton.dataset.action;
 
-            if (event.target.closest('[data-action="delete"]')) {
+            if (action === "delete") {
                 if (!window.confirm(t("deleteConfirm", { name: style.name }))) return;
                 state.styles.splice(index, 1);
                 state.expanded.delete(style.id);
@@ -584,17 +739,34 @@
                 render();
                 return;
             }
-            if (event.target.closest("input, textarea, button, [data-drag-handle]")) return;
-            if (state.expanded.has(style.id)) state.expanded.delete(style.id);
-            else state.expanded.add(style.id);
-            render();
+            if (action === "move-up") {
+                moveStyleOneStep(index, -1);
+                return;
+            }
+            if (action === "move-down") {
+                moveStyleOneStep(index, 1);
+                return;
+            }
+            if (action === "toggle") {
+                if (Date.now() < state.suppressToggleUntil) return;
+                if (state.expanded.has(style.id)) state.expanded.delete(style.id);
+                else state.expanded.add(style.id);
+                render();
+                return;
+            }
+            const field = actionButton.dataset.clipboardField;
+            if (!field || !["prompt", "negative_prompt"].includes(field)) return;
+            if (action === "copy") await copyStyleField(style, field, actionButton);
+            else if (action === "paste") await pasteStyleField(style, field, card, actionButton);
         });
 
         list.addEventListener("dragstart", (event) => {
             const handle = event.target.closest("[data-drag-handle]");
             const card = event.target.closest(".style-editor-card");
             if (!handle || !card) return;
+            collapseExpandedCardsForDrag(list);
             state.draggingId = card.dataset.id;
+            state.suppressToggleUntil = Date.now() + 350;
             event.dataTransfer.effectAllowed = "move";
             event.dataTransfer.setData("text/plain", state.draggingId);
             card.classList.add("is-dragging");
@@ -605,8 +777,10 @@
             if (!card || !state.draggingId) return;
             event.preventDefault();
             event.dataTransfer.dropEffect = "move";
-            list.querySelectorAll(".drag-over").forEach((item) => item.classList.remove("drag-over"));
-            card.classList.add("drag-over");
+            list.querySelectorAll(".drag-over-before, .drag-over-after").forEach((item) => item.classList.remove("drag-over-before", "drag-over-after"));
+            const insertAfter = event.clientY > card.getBoundingClientRect().top + card.getBoundingClientRect().height / 2;
+            card.classList.add(insertAfter ? "drag-over-after" : "drag-over-before");
+            autoScrollDuringDrag(event.clientY);
         });
 
         list.addEventListener("drop", (event) => {
@@ -622,7 +796,8 @@
 
         list.addEventListener("dragend", () => {
             state.draggingId = null;
-            list.querySelectorAll(".is-dragging, .drag-over").forEach((item) => item.classList.remove("is-dragging", "drag-over"));
+            state.suppressToggleUntil = Date.now() + 350;
+            list.querySelectorAll(".is-dragging, .drag-over-before, .drag-over-after").forEach((item) => item.classList.remove("is-dragging", "drag-over-before", "drag-over-after"));
         });
     }
 
@@ -656,6 +831,7 @@
                 <div class="style-editor-settings-body">
                     <label><input id="style-editor-backup-enabled" type="checkbox" checked><span id="style-editor-backup-enabled-label"></span></label>
                     <label class="style-editor-count-label"><span id="style-editor-keep-label"></span><input id="style-editor-backup-count" type="number" min="1" max="100" step="1" value="10"><span id="style-editor-count-unit"></span></label>
+                    <button id="style-editor-backup-now" type="button" class="style-editor-action-button"></button>
                     <div class="style-editor-backup-folder-row">
                         <label id="style-editor-folder-label" for="style-editor-backup-folder"></label>
                         <input id="style-editor-backup-folder" class="style-editor-backup-folder" type="text" value="styles_backups" spellcheck="false">

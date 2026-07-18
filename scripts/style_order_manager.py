@@ -244,6 +244,35 @@ def api_style_editor(_: gr.Blocks, app: FastAPI):
             return _error(str(error), 400)
         return {"backups": backups, "folder": str(backup_dir)}
 
+    @app.post(f"{API_PREFIX}/backup")
+    async def create_backup(payload: dict = Body(...)):
+        style_path = _style_path()
+        try:
+            backup_dir = _resolve_backup_dir(style_path, payload.get("backup_folder"))
+            backup_count = int(payload.get("backup_count", 10))
+            if not 1 <= backup_count <= 100:
+                raise ValueError("backup_count must be between 1 and 100")
+        except (AttributeError, TypeError, ValueError) as error:
+            return _error(str(error), 400)
+
+        if not style_path.is_file():
+            return _error(f"styles.csv not found: {style_path}", 404)
+
+        try:
+            with SAVE_LOCK:
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                backup_path = backup_dir / f"{style_path.stem}_{timestamp}_manual.csv"
+                shutil.copy2(style_path, backup_path)
+                _cleanup_backups(backup_dir, style_path, backup_count)
+        except OSError as error:
+            return _error(f"Could not back up styles.csv: {error}", 500)
+
+        return {
+            "backup_file": backup_path.name,
+            "backup_folder": str(backup_dir),
+        }
+
     @app.post(f"{API_PREFIX}/restore")
     async def restore_styles(payload: dict = Body(...)):
         style_path = _style_path()

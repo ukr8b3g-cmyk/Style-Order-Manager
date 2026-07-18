@@ -20,9 +20,10 @@ It was also created because a large `styles.csv` becomes difficult to understand
 
 - Drag-and-drop style reordering
 - Search, add, delete, and edit `name`, `prompt`, and `negative_prompt`
-- Compact collapsed cards; click a card to show the positive/negative prompts
+- Compact one-line cards with move buttons, drag handles, and a dedicated expand triangle
+- Copy and paste controls shown only in the expanded prompt editor
 - Unsaved-change indicator and explicit Save action
-- Backup before saving, with a selectable folder and retention count
+- Automatic backup before saving plus a manual **Back up now** action
 - Backup list and restore action
 - Theme-aware controls for dark and light WebUI themes
 - English default UI with an `EN / JA` switch
@@ -73,7 +74,7 @@ Press the **pencil button** in the WebUI prompt controls to open the prompt/styl
 
 ## Backup and restore
 
-Backups are enabled by default and retain 10 files. The standard relative path is:
+Automatic backups are enabled by default and retain 10 files. **Back up now** immediately copies the saved `styles.csv`; unsaved editor changes are not included. The standard relative path is:
 
 ```text
 styles_backups
