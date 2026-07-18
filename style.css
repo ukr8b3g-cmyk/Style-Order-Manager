@@ -230,15 +230,15 @@
     min-width: 126px;
     min-height: 36px;
     padding: 6px 15px;
-    color: var(--style-editor-input-text) !important;
-    background: var(--style-editor-input-bg) !important;
-    border-color: var(--style-editor-input-border) !important;
+    color: #fff !important;
+    background: #2f78c4 !important;
+    border-color: #2f78c4 !important;
     font-size: 0.82rem;
     font-weight: 700;
 }
 
 #style-editor-backup-now:hover:not(:disabled) {
-    background: var(--style-editor-input-bg) !important;
+    background: #2f78c4 !important;
     filter: brightness(1.12);
 }
 
