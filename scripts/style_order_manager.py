@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import io
 import os
+import re
 import shutil
 import tempfile
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import gradio as gr
-from fastapi import Body, FastAPI
+from fastapi import APIRouter, Body, Depends, FastAPI
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -56,7 +59,11 @@ def _read_styles(style_path: Path) -> list[dict[str, str]]:
     if not style_path.is_file():
         raise FileNotFoundError(f"styles.csv not found: {style_path}")
 
-    with style_path.open("r", encoding="utf-8-sig", newline="") as file:
+    return _parse_styles(style_path.read_bytes())
+
+
+def _parse_styles(content: bytes) -> list[dict[str, str]]:
+    with io.StringIO(content.decode("utf-8-sig"), newline="") as file:
         reader = csv.DictReader(file)
         if tuple(reader.fieldnames or ()) != CSV_FIELDS:
             raise ValueError("CSV header must be name,prompt,negative_prompt")
@@ -72,7 +79,31 @@ def _read_styles(style_path: Path) -> list[dict[str, str]]:
         return styles
 
 
-def _write_styles(style_path: Path, styles: list[dict[str, str]]) -> None:
+def _revision(style_path: Path) -> str:
+    try:
+        return hashlib.sha256(style_path.read_bytes()).hexdigest()
+    except FileNotFoundError:
+        return "missing"
+
+
+def _styles_snapshot(style_path: Path) -> dict:
+    try:
+        content = style_path.read_bytes()
+    except FileNotFoundError:
+        return {"styles": [], "revision": "missing", "missing_file": True}
+    return {"styles": _parse_styles(content), "revision": hashlib.sha256(content).hexdigest()}
+
+
+class RevisionConflict(ValueError):
+    pass
+
+
+def _check_revision(style_path: Path, expected) -> None:
+    if not isinstance(expected, str) or expected != _revision(style_path):
+        raise RevisionConflict("styles.csv changed or revision is missing. Reload before saving or restoring.")
+
+
+def _write_styles(style_path: Path, styles: list[dict[str, str]], expected_revision=None) -> str:
     file_descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{style_path.name}.",
         suffix=".tmp",
@@ -83,7 +114,13 @@ def _write_styles(style_path: Path, styles: list[dict[str, str]]) -> None:
             writer = csv.DictWriter(file, fieldnames=CSV_FIELDS, lineterminator="\n")
             writer.writeheader()
             writer.writerows(styles)
+            file.flush()
+            os.fsync(file.fileno())
+        revision = _revision(Path(temporary_name))
+        if expected_revision is not None:
+            _check_revision(style_path, expected_revision)
         os.replace(temporary_name, style_path)
+        return revision
     finally:
         if os.path.exists(temporary_name):
             os.unlink(temporary_name)
@@ -120,33 +157,90 @@ def _normalise_styles(raw_styles) -> list[dict[str, str]]:
     return styles
 
 
-def _cleanup_backups(backup_dir: Path, style_path: Path, keep_count: int) -> None:
+def _backup_created(style_path: Path, name: str) -> datetime | None:
+    # Exact historical formats only; the prefix alone is not proof of a backup.
+    match = re.fullmatch(
+        re.escape(style_path.stem) + r"_(\d{8}_\d{6}_(?:\d{3}|\d{6}))(?:_(manual|pre_restore))?\.csv",
+        name,
+    )
+    if match:
+        try:
+            return datetime.strptime(match[1], "%Y%m%d_%H%M%S_%f")
+        except ValueError:
+            pass
+    return None
+
+
+def _backup_files(backup_dir: Path, style_path: Path) -> list[Path]:
     if not backup_dir.is_dir():
-        return
-    backups = [
-        path
-        for path in backup_dir.glob(f"{style_path.stem}_*.csv")
-        if path.is_file()
-    ]
-    backups.sort(key=lambda path: (path.stat().st_mtime_ns, path.name), reverse=True)
-    for path in backups[keep_count:]:
-        path.unlink()
+        return []
+    backups = [path for path in backup_dir.iterdir()
+               if not path.is_symlink() and path.is_file() and _backup_created(style_path, path.name)]
+    return sorted(backups, key=lambda path: (_backup_created(style_path, path.name), path.name), reverse=True)
+
+
+def _cleanup_backups(backup_dir: Path, style_path: Path, keep_count: int, protected: Path) -> None:
+    backups = _backup_files(backup_dir, style_path)
+    # A newly created/safety backup must survive even if the clock moved backwards.
+    protected = protected.resolve()
+    others = [path.resolve() for path in backups if path.resolve() != protected]
+    retained = {protected, *others[:keep_count - 1]}
+    for path in backups:
+        if path.resolve() not in retained:
+            path.unlink()
+    if not protected.is_file():
+        raise OSError("The newly created backup was not retained")
+
+
+def _create_backup(style_path: Path, backup_dir: Path, kind: str = "") -> Path:
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backups = _backup_files(backup_dir, style_path)
+    created = datetime.now()
+    if backups:
+        created = max(created, _backup_created(style_path, backups[0].name) + timedelta(microseconds=1))
+    suffix = f"_{kind}" if kind else ""
+    while True:
+        path = backup_dir / f"{style_path.stem}_{created:%Y%m%d_%H%M%S_%f}{suffix}.csv"
+        try:
+            output = path.open("xb")
+            break
+        except FileExistsError:
+            created += timedelta(microseconds=1)
+    try:
+        with output, style_path.open("rb") as source:
+            shutil.copyfileobj(source, output)
+            output.flush()
+            os.fsync(output.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    return path
+
+
+def _restore_atomic(backup_path: Path, style_path: Path, expected_revision=None) -> tuple[list[dict[str, str]], str]:
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{style_path.name}.", suffix=".tmp", dir=style_path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as output, backup_path.open("rb") as source:
+            shutil.copyfileobj(source, output)
+            output.flush()
+            os.fsync(output.fileno())
+        restored = _normalise_styles(_read_styles(Path(temporary_name)))
+        revision = _revision(Path(temporary_name))
+        if expected_revision is not None:
+            _check_revision(style_path, expected_revision)
+        os.replace(temporary_name, style_path)
+        return restored, revision
+    finally:
+        if os.path.exists(temporary_name):
+            os.unlink(temporary_name)
 
 
 def _list_backups(backup_dir: Path, style_path: Path) -> list[dict]:
-    if not backup_dir.is_dir():
-        return []
-
-    backups = [
-        path
-        for path in backup_dir.glob(f"{style_path.stem}_*.csv")
-        if path.is_file()
-    ]
-    backups.sort(key=lambda path: (path.stat().st_mtime_ns, path.name), reverse=True)
+    backups = _backup_files(backup_dir, style_path)
     return [
         {
             "name": path.name,
-            "modified": int(path.stat().st_mtime * 1000),
+            "modified": int(_backup_created(style_path, path.name).timestamp() * 1000),
             "size": path.stat().st_size,
         }
         for path in backups
@@ -159,8 +253,8 @@ def _selected_backup_path(backup_dir: Path, style_path: Path, backup_name: str) 
     if (
         not name
         or Path(name).name != name
-        or not name.lower().startswith(f"{style_path.stem.lower()}_")
-        or candidate.suffix.lower() != ".csv"
+        or _backup_created(style_path, name) is None
+        or (backup_dir / name).is_symlink()
         or candidate.parent != backup_dir.resolve()
         or not candidate.is_file()
     ):
@@ -189,38 +283,69 @@ def _error(message: str, status_code: int = 400):
     return JSONResponse({"error": message}, status_code=status_code)
 
 
-def api_style_editor(_: gr.Blocks, app: FastAPI):
-    @app.get(f"{API_PREFIX}/styles")
+def _reload_host_styles() -> str | None:
+    try:
+        if shared.prompt_styles is not None:
+            shared.prompt_styles.reload()
+    except Exception as error:
+        # The file was committed; do not invite a retry with a stale revision.
+        return str(error)
+    return None
+
+
+def _host_auth_dependencies(demo: gr.Blocks | None, app: FastAPI) -> list:
+    # Reuse the host's complete dependency graph, including nested cookie/Basic guards.
+    if demo is not None:
+        for route in app.routes:
+            if getattr(route, "path", None) == "/login_check" and "GET" in getattr(route, "methods", set()):
+                return [Depends(route.endpoint)]
+        raise RuntimeError("Style Order Manager: host Gradio login_check unavailable; API disabled")
+
+    for route in app.routes:
+        if getattr(route, "path", None) == "/sdapi/v1/options" and "GET" in getattr(route, "methods", set()):
+            dependencies = list(route.dependencies)
+            if getattr(getattr(shared, "cmd_opts", None), "api_auth", None) and not dependencies:
+                break
+            return dependencies
+    raise RuntimeError("Style Order Manager: host API authentication contract unavailable; API disabled")
+
+
+def api_style_editor(demo: gr.Blocks | None, app: FastAPI):
+    router = APIRouter(prefix=API_PREFIX, dependencies=_host_auth_dependencies(demo, app))
+
+    @router.get("/styles")
     async def get_styles():
         style_path = _style_path()
         try:
-            styles = _read_styles(style_path)
+            with SAVE_LOCK:
+                snapshot = _styles_snapshot(style_path)
         except FileNotFoundError as error:
             return _error(str(error), 404)
         except (OSError, ValueError) as error:
             return _error(str(error), 500)
 
         return {
-            "styles": styles,
+            **snapshot,
             "file": style_path.name,
             "backup_folder": BACKUP_FOLDER_NAME,
         }
 
-    @app.post(f"{API_PREFIX}/reload")
+    @router.post("/reload")
     async def reload_styles():
         style_path = _style_path()
         try:
-            if shared.prompt_styles is not None:
-                shared.prompt_styles.reload()
-            styles = _read_styles(style_path)
+            with SAVE_LOCK:
+                if style_path.is_file() and shared.prompt_styles is not None:
+                    shared.prompt_styles.reload()
+                snapshot = _styles_snapshot(style_path)
         except FileNotFoundError as error:
             return _error(str(error), 404)
         except (OSError, ValueError) as error:
             return _error(str(error), 500)
 
-        return {"styles": styles, "file": style_path.name}
+        return {**snapshot, "file": style_path.name}
 
-    @app.post(f"{API_PREFIX}/select-backup-folder")
+    @router.post("/select-backup-folder")
     async def select_backup_folder():
         style_path = _style_path()
         initial_dir = _backup_dir(style_path)
@@ -234,17 +359,18 @@ def api_style_editor(_: gr.Blocks, app: FastAPI):
             return _error(f"Could not open the folder picker: {error}", 500)
         return {"folder": selected or ""}
 
-    @app.post(f"{API_PREFIX}/backups")
+    @router.post("/backups")
     async def list_backups(payload: dict = Body(...)):
         style_path = _style_path()
         try:
             backup_dir = _resolve_backup_dir(style_path, payload.get("backup_folder"))
-            backups = _list_backups(backup_dir, style_path)
+            with SAVE_LOCK:
+                backups = _list_backups(backup_dir, style_path)
         except (AttributeError, OSError, TypeError, ValueError) as error:
             return _error(str(error), 400)
         return {"backups": backups, "folder": str(backup_dir)}
 
-    @app.post(f"{API_PREFIX}/backup")
+    @router.post("/backup")
     async def create_backup(payload: dict = Body(...)):
         style_path = _style_path()
         try:
@@ -260,11 +386,8 @@ def api_style_editor(_: gr.Blocks, app: FastAPI):
 
         try:
             with SAVE_LOCK:
-                backup_dir.mkdir(parents=True, exist_ok=True)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-                backup_path = backup_dir / f"{style_path.stem}_{timestamp}_manual.csv"
-                shutil.copy2(style_path, backup_path)
-                _cleanup_backups(backup_dir, style_path, backup_count)
+                backup_path = _create_backup(style_path, backup_dir, "manual")
+                _cleanup_backups(backup_dir, style_path, backup_count, backup_path)
         except OSError as error:
             return _error(f"Could not back up styles.csv: {error}", 500)
 
@@ -273,47 +396,48 @@ def api_style_editor(_: gr.Blocks, app: FastAPI):
             "backup_folder": str(backup_dir),
         }
 
-    @app.post(f"{API_PREFIX}/restore")
+    @router.post("/restore")
     async def restore_styles(payload: dict = Body(...)):
         style_path = _style_path()
         try:
             backup_dir = _resolve_backup_dir(style_path, payload.get("backup_folder"))
-            backup_path = _selected_backup_path(backup_dir, style_path, payload.get("backup_name"))
-            restored_styles = _normalise_styles(_read_styles(backup_path))
             backup_count = int(payload.get("backup_count", 10))
             if not 1 <= backup_count <= 100:
                 raise ValueError("backup_count must be between 1 and 100")
         except (AttributeError, OSError, TypeError, ValueError) as error:
             return _error(str(error), 400)
 
-        if not style_path.is_file():
-            return _error(f"styles.csv not found: {style_path}", 404)
-
         safety_backup_name = None
         try:
             with SAVE_LOCK:
-                backup_dir.mkdir(parents=True, exist_ok=True)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-                safety_backup_path = backup_dir / f"{style_path.stem}_{timestamp}_pre_restore.csv"
-                shutil.copy2(style_path, safety_backup_path)
-                safety_backup_name = safety_backup_path.name
-                shutil.copy2(backup_path, style_path)
-                if shared.prompt_styles is not None:
-                    shared.prompt_styles.reload()
-                _cleanup_backups(backup_dir, style_path, backup_count)
+                _check_revision(style_path, payload.get("revision"))
+                backup_path = _selected_backup_path(backup_dir, style_path, payload.get("backup_name"))
+                _normalise_styles(_read_styles(backup_path))
+                safety_backup_path = None
+                if style_path.is_file():
+                    safety_backup_path = _create_backup(style_path, backup_dir, "pre_restore")
+                    safety_backup_name = safety_backup_path.name
+                restored_styles, revision = _restore_atomic(backup_path, style_path, payload.get("revision"))
+                # Retention runs only after replacement. Failed restores keep the safety copy.
+                _cleanup_backups(backup_dir, style_path, backup_count, safety_backup_path or backup_path)
+                reload_warning = _reload_host_styles()
+        except RevisionConflict as error:
+            return _error(str(error), 409)
         except (OSError, ValueError) as error:
             return _error(f"Could not restore styles.csv: {error}", 500)
 
         return {
             "styles": restored_styles,
+            "revision": revision,
             "file": style_path.name,
             "restored_file": backup_path.name,
             "safety_backup_file": safety_backup_name,
             "folder": str(backup_dir),
-            "restart_required": False,
+            "restart_required": bool(reload_warning),
+            "reload_warning": reload_warning,
         }
 
-    @app.post(f"{API_PREFIX}/save")
+    @router.post("/save")
     async def save_styles(payload: dict = Body(...)):
         style_path = _style_path()
         try:
@@ -332,28 +456,31 @@ def api_style_editor(_: gr.Blocks, app: FastAPI):
         backup_name = None
         try:
             with SAVE_LOCK:
+                _check_revision(style_path, payload.get("revision"))
                 if backup_enabled:
-                    backup_dir.mkdir(parents=True, exist_ok=True)
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-                    backup_path = backup_dir / f"{style_path.stem}_{timestamp}.csv"
-                    shutil.copy2(style_path, backup_path)
+                    backup_path = _create_backup(style_path, backup_dir)
                     backup_name = backup_path.name
 
-                _write_styles(style_path, styles)
-                if shared.prompt_styles is not None:
-                    shared.prompt_styles.reload()
+                revision = _write_styles(style_path, styles, payload.get("revision"))
                 if backup_enabled:
-                    _cleanup_backups(backup_dir, style_path, backup_count)
+                    _cleanup_backups(backup_dir, style_path, backup_count, backup_path)
+                reload_warning = _reload_host_styles()
+        except RevisionConflict as error:
+            return _error(str(error), 409)
         except (OSError, ValueError) as error:
             return _error(f"Could not save styles.csv: {error}", 500)
 
         return {
             "styles": styles,
+            "revision": revision,
             "file": style_path.name,
             "backup_file": backup_name,
             "backup_folder": str(backup_dir),
-            "restart_required": False,
+            "restart_required": bool(reload_warning),
+            "reload_warning": reload_warning,
         }
+
+    app.include_router(router)
 
 
 def on_ui_tabs():

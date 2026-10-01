@@ -2,7 +2,7 @@
     "use strict";
 
     const APP_ID = "style-order-manager-app";
-    const API_BASE = "/style-order-manager/v1";
+    const API_PREFIX = "/style-order-manager/v1";
     const STORAGE_KEY = "forge_neo_style_editor_settings_v1";
     const SETTINGS_VERSION = 2;
     const DEFAULT_BACKUP_FOLDER = "styles_backups";
@@ -23,6 +23,8 @@
             statusReady: "読み込み前",
             statusLoading: "styles.csv を再読込しています...",
             statusLoaded: "{file} を読み込みました。",
+            statusMissing: "{file} がありません。バックアップを選んでリストアできます。",
+            conflict: "別のタブまたは外部で styles.csv が変更されました。未保存の編集は保持しています。編集を控えてから一覧を再読込し、変更を適用し直してください。",
             statusReadError: "読込エラー: {message}",
             help: "↑↓で1段ずつ移動、☷をドラッグして並べ替え、▶で編集欄を展開します。編集内容は「保存」するまで styles.csv に反映されません。",
             backupSettings: "バックアップ設定",
@@ -62,6 +64,8 @@
             reloadConfirm: "未保存の変更を破棄して styles.csv を再読込しますか？",
             deleteConfirm: "「{name}」を削除しますか？",
             restoreConfirm: "現在の styles.csv を安全用バックアップにしてから「{name}」をリストアしますか？",
+            restoreDirtyConfirm: "未保存の編集は破棄されます。{confirm}",
+            restoredMissing: "リストアしました。元のCSVがなかったため復元前バックアップはありません。",
             folderChanged: "バックアップ保存先を変更しました。",
             folderReset: "バックアップ保存先を標準に戻しました。",
             folderError: "フォルダ選択エラー: {message} パスを直接入力できます。",
@@ -93,6 +97,8 @@
             statusReady: "Not loaded",
             statusLoading: "Reloading styles.csv...",
             statusLoaded: "Loaded {file}.",
+            statusMissing: "{file} is missing. Select a backup to restore it.",
+            conflict: "Another tab or external writer changed styles.csv. Your unsaved edits are retained. Copy them before reloading the list, then apply them again.",
             statusReadError: "Read error: {message}",
             help: "Use ↑↓ to move one step, drag ☷ to reorder, and use ▶ to expand the editor. Changes are not written to styles.csv until you press Save.",
             backupSettings: "Backup settings",
@@ -132,6 +138,8 @@
             reloadConfirm: "Discard unsaved changes and reload styles.csv?",
             deleteConfirm: "Delete “{name}”?",
             restoreConfirm: "Back up the current styles.csv, then restore “{name}”?",
+            restoreDirtyConfirm: "Unsaved edits will be discarded. {confirm}",
+            restoredMissing: "Restored. There was no current CSV to back up.",
             folderChanged: "Backup folder changed.",
             folderReset: "Backup folder reset to default.",
             folderError: "Folder picker error: {message} You can enter a path manually.",
@@ -175,6 +183,8 @@
         draggingId: null,
         suppressToggleUntil: 0,
         backups: [],
+        revision: null,
+        backupsRequest: 0,
     };
 
     let root = null;
@@ -233,7 +243,7 @@
 
     function updateBackupControls() {
         const count = root.querySelector("#style-editor-backup-count");
-        count.disabled = false;
+        count.disabled = state.busy;
     }
 
     function applyLanguage() {
@@ -283,6 +293,8 @@
 
     function setBusy(busy) {
         state.busy = busy;
+        if (busy) state.draggingId = null;
+        root.setAttribute("aria-busy", String(busy));
         ["#style-editor-add", "#style-editor-reload", "#style-editor-save"].forEach((selector) => {
             const button = root.querySelector(selector);
             if (button) button.disabled = busy || (selector === "#style-editor-save" && !state.dirty);
@@ -296,6 +308,23 @@
         if (restoreButton) restoreButton.disabled = busy || !backupSelect?.value;
         if (backupSelect) backupSelect.disabled = busy;
         root.querySelector("#style-editor-search").disabled = busy;
+        ["#style-editor-language", "#style-editor-backup-enabled", "#style-editor-backup-count", "#style-editor-backup-folder"].forEach((selector) => {
+            root.querySelector(selector).disabled = busy;
+        });
+        lockRowControls();
+    }
+
+    function lockRowControls() {
+        root.querySelectorAll(".style-editor-card").forEach((card) => {
+            const index = Number(card.dataset.index);
+            card.querySelectorAll("input, textarea, button").forEach((control) => {
+                const action = control.dataset.action;
+                control.disabled = state.busy
+                    || action === "move-up" && index === 0
+                    || action === "move-down" && index === state.styles.length - 1;
+            });
+            card.querySelector("[data-drag-handle]").draggable = !state.busy;
+        });
     }
 
     function markDirty() {
@@ -358,17 +387,31 @@
         list.innerHTML = matches.length
             ? matches.map(({ style, index }) => cardMarkup(style, index)).join("")
             : `<div class="style-editor-empty">${escapeHtml(t("noMatches"))}</div>`;
+        lockRowControls();
         updateSummary();
     }
 
+    function apiBase() {
+        // Gradio's configured root includes --subpath; pathname covers older hosts.
+        const configuredRoot = globalThis.gradio_config?.root;
+        const base = typeof configuredRoot === "string" && configuredRoot
+            ? new URL(configuredRoot, window.location.href).pathname
+            : window.location.pathname;
+        return `${base.replace(/\/+$/, "")}${API_PREFIX}`;
+    }
+
     async function request(path, options = {}) {
-        const response = await fetch(`${API_BASE}${path}`, {
+        const response = await fetch(`${apiBase()}${path}`, {
             cache: "no-store",
             ...options,
             headers: { "Content-Type": "application/json", ...(options.headers || {}) },
         });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        if (!response.ok) {
+            const error = new Error(response.status === 409 ? t("conflict") : data.error || data.detail || `HTTP ${response.status}`);
+            error.status = response.status;
+            throw error;
+        }
         return data;
     }
 
@@ -379,6 +422,7 @@
     }
 
     async function loadBackups() {
+        const requestId = ++state.backupsRequest;
         const folder = root.querySelector("#style-editor-backup-folder").value.trim() || DEFAULT_BACKUP_FOLDER;
         const select = root.querySelector("#style-editor-backup-select");
         const summary = root.querySelector("#style-editor-backup-summary");
@@ -387,6 +431,7 @@
                 method: "POST",
                 body: JSON.stringify({ backup_folder: folder }),
             });
+            if (requestId !== state.backupsRequest) return;
             state.backups = data.backups || [];
             select.innerHTML = state.backups.length
                 ? state.backups.map((backup) => {
@@ -398,6 +443,7 @@
             summary.textContent = t("backupCount", { count: state.backups.length });
             updateRestoreButton();
         } catch (error) {
+            if (requestId !== state.backupsRequest) return;
             state.backups = [];
             select.innerHTML = `<option value="">${escapeHtml(t("backupListError"))}</option>`;
             summary.textContent = t("backupListError");
@@ -406,6 +452,8 @@
     }
 
     async function browseBackupFolder() {
+        if (state.busy) return;
+        setBusy(true);
         try {
             const data = await request("/select-backup-folder", { method: "POST" });
             if (!data.folder) return;
@@ -415,10 +463,13 @@
             setStatus(t("folderChanged"), "success");
         } catch (error) {
             setStatus(t("folderError", { message: error.message }), "error");
+        } finally {
+            setBusy(false);
         }
     }
 
     async function resetBackupFolder() {
+        if (state.busy) return;
         root.querySelector("#style-editor-backup-folder").value = DEFAULT_BACKUP_FOLDER;
         persistSettings();
         await loadBackups();
@@ -426,6 +477,7 @@
     }
 
     async function createBackupNow() {
+        if (state.busy) return;
         const countInput = root.querySelector("#style-editor-backup-count");
         const folderInput = root.querySelector("#style-editor-backup-folder");
         const backupCount = Math.min(100, Math.max(1, Number(countInput.value) || 10));
@@ -451,10 +503,12 @@
     }
 
     async function restoreBackup() {
+        if (state.busy) return;
         const select = root.querySelector("#style-editor-backup-select");
         const backupName = select.value;
         if (!backupName) return;
-        if (!window.confirm(t("restoreConfirm", { name: backupName }))) return;
+        const confirm = t("restoreConfirm", { name: backupName });
+        if (!window.confirm(state.dirty ? t("restoreDirtyConfirm", { confirm }) : confirm)) return;
 
         const folder = root.querySelector("#style-editor-backup-folder").value.trim() || DEFAULT_BACKUP_FOLDER;
         const count = Math.min(100, Math.max(1, Number(root.querySelector("#style-editor-backup-count").value) || 10));
@@ -463,14 +517,17 @@
         try {
             const data = await request("/restore", {
                 method: "POST",
-                body: JSON.stringify({ backup_folder: folder, backup_name: backupName, backup_count: count }),
+                body: JSON.stringify({ backup_folder: folder, backup_name: backupName, backup_count: count, revision: state.revision }),
             });
             state.styles = (data.styles || []).map(makeStyle);
+            state.revision = data.revision;
             state.expanded.clear();
             state.dirty = false;
             render();
             await loadBackups();
-            setStatus(t("restored", { file: data.safety_backup_file }), "success");
+            const refreshed = data.restart_required ? 0 : refreshForgeStyleControls();
+            const message = data.safety_backup_file ? t("restored", { file: data.safety_backup_file }) : t("restoredMissing");
+            setStatus(message + t(data.restart_required ? "restartNeeded" : refreshed ? "stylesRefreshed" : "stylesRefreshManual"), "success");
         } catch (error) {
             setStatus(t("restoreError", { message: error.message }), "error");
         } finally {
@@ -480,16 +537,18 @@
     }
 
     async function reloadStyles(force = false) {
+        if (state.busy) return;
         if (state.dirty && !force && !window.confirm(t("reloadConfirm"))) return;
         setBusy(true);
         setStatus(t("statusLoading"), "working");
         try {
             const data = await request("/reload", { method: "POST" });
             state.styles = (data.styles || []).map(makeStyle);
+            state.revision = data.revision;
             state.expanded.clear();
             state.dirty = false;
             render();
-            setStatus(t("statusLoaded", { file: data.file || "styles.csv" }), "success");
+            setStatus(t(data.missing_file ? "statusMissing" : "statusLoaded", { file: data.file || "styles.csv" }), "success");
         } catch (error) {
             setStatus(t("statusReadError", { message: error.message }), "error");
         } finally {
@@ -517,6 +576,7 @@
     }
 
     async function saveStyles() {
+        if (state.busy) return;
         const validationError = validateStyles();
         if (validationError) {
             setStatus(validationError, "error");
@@ -538,15 +598,18 @@
                 method: "POST",
                 body: JSON.stringify({
                     styles: state.styles.map(({ name, prompt, negative_prompt }) => ({ name, prompt, negative_prompt })),
+                    revision: state.revision,
                     backup_enabled: enabled.checked,
                     backup_count: backupCount,
                     backup_folder: backupFolder,
                 }),
             });
             state.styles = (data.styles || []).map(makeStyle);
+            state.revision = data.revision;
             state.expanded.clear();
             state.dirty = false;
             render();
+            await loadBackups();
             const backupMessage = data.backup_file ? t("backupMessage", { file: data.backup_file }) : "";
             const refreshedControls = data.restart_required ? 0 : refreshForgeStyleControls();
             const reloadMessage = data.restart_required
@@ -570,6 +633,7 @@
     }
 
     function addStyle() {
+        if (state.busy) return;
         const style = makeStyle({ name: nextStyleName(), prompt: "", negative_prompt: "" });
         state.styles.push(style);
         state.expanded.add(style.id);
@@ -582,6 +646,7 @@
     }
 
     function moveStyle(fromIndex, targetIndex, insertAfter) {
+        if (state.busy) return;
         if (fromIndex < 0 || targetIndex < 0 || fromIndex === targetIndex && !insertAfter) return;
         let insertIndex = targetIndex + (insertAfter ? 1 : 0);
         if (fromIndex < insertIndex) insertIndex -= 1;
@@ -593,6 +658,7 @@
     }
 
     function moveStyleOneStep(index, offset) {
+        if (state.busy) return;
         const targetIndex = index + offset;
         if (index < 0 || targetIndex < 0 || targetIndex >= state.styles.length) return;
         const [moved] = state.styles.splice(index, 1);
@@ -642,6 +708,9 @@
     }
 
     async function pasteStyleField(style, field, card, button) {
+        if (state.busy) return;
+        // Hold the same mutation lock while the clipboard promise is pending.
+        setBusy(true);
         try {
             const value = await navigator.clipboard.readText();
             style[field] = value;
@@ -651,6 +720,8 @@
             flashClipboardButton(button, t("pasted"));
         } catch (error) {
             setStatus(t("clipboardReadError", { message: error.message }), "error");
+        } finally {
+            setBusy(false);
         }
     }
 
@@ -686,6 +757,7 @@
         root.querySelector("#style-editor-restore").addEventListener("click", restoreBackup);
 
         list.addEventListener("input", (event) => {
+            if (state.busy) return;
             const field = event.target.dataset.field;
             const card = event.target.closest(".style-editor-card");
             if (!field || !card) return;
@@ -697,6 +769,7 @@
         });
 
         list.addEventListener("click", async (event) => {
+            if (state.busy) return;
             const card = event.target.closest(".style-editor-card");
             if (!card) return;
             const index = Number(card.dataset.index);
@@ -736,6 +809,7 @@
         });
 
         list.addEventListener("dragstart", (event) => {
+            if (state.busy) { event.preventDefault(); return; }
             const handle = event.target.closest("[data-drag-handle]");
             const card = event.target.closest(".style-editor-card");
             if (!handle || !card) return;
@@ -748,6 +822,7 @@
         });
 
         list.addEventListener("dragover", (event) => {
+            if (state.busy) return;
             const card = event.target.closest(".style-editor-card");
             if (!card || !state.draggingId) return;
             event.preventDefault();
@@ -759,6 +834,7 @@
         });
 
         list.addEventListener("drop", (event) => {
+            if (state.busy) { event.preventDefault(); return; }
             const card = event.target.closest(".style-editor-card");
             if (!card || !state.draggingId) return;
             event.preventDefault();
