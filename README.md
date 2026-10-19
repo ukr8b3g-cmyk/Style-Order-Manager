@@ -138,3 +138,7 @@ No `install.py` is needed because the extension uses only WebUI and Python stand
 ## Extension index registration
 
 The WebUI Extensions tab obtains its available-extension list from an external JSON index. Registration is a separate index update using the repository URL, display name, description, date, and tags such as `tab` and `UI related`.
+
+## License
+
+The maintainer-authored code, documentation, and project materials are licensed under the [MIT License](LICENSE). See [NOTICE.md](NOTICE.md) for the scope and third-party rights.
