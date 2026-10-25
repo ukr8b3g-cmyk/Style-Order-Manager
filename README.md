@@ -10,6 +10,12 @@ Style Order Manager was created around one simple idea: keep each style on a com
 
 It was also created because a large `styles.csv` becomes difficult to understand and maintain when edited directly in a text editor. This focused UI keeps the order and contents easy to scan without becoming a feature-heavy editor.
 
+## v1.0.0 — backup fixes (2026-10-25)
+
+- Completed saves/restores return their committed revision even if backup retention fails; cleanup warnings are shown separately.
+- Restore selections are bound to their verified backup folder. Editing the path or loading a new list disables the previous selection.
+- Existing CSV, backups and settings are preserved. See [release notes and validation](docs/RELEASE_v1.0.0.md).
+
 ## Compatibility
 
 - Forge Neo: verified in the current development environment

@@ -192,6 +192,15 @@ def _cleanup_backups(backup_dir: Path, style_path: Path, keep_count: int, protec
         raise OSError("The newly created backup was not retained")
 
 
+
+def _cleanup_backups_warning(backup_dir: Path, style_path: Path, keep_count: int, protected: Path) -> str | None:
+    # Copy/replacement is already committed. Retention failure cannot undo it.
+    try:
+        _cleanup_backups(backup_dir, style_path, keep_count, protected)
+    except (OSError, ValueError) as error:
+        return str(error) or type(error).__name__
+    return None
+
 def _create_backup(style_path: Path, backup_dir: Path, kind: str = "") -> Path:
     backup_dir.mkdir(parents=True, exist_ok=True)
     backups = _backup_files(backup_dir, style_path)
@@ -363,7 +372,7 @@ def api_style_editor(demo: gr.Blocks | None, app: FastAPI):
     async def list_backups(payload: dict = Body(...)):
         style_path = _style_path()
         try:
-            backup_dir = _resolve_backup_dir(style_path, payload.get("backup_folder"))
+            backup_dir = _resolve_backup_dir(style_path, payload.get("backup_folder")).resolve()
             with SAVE_LOCK:
                 backups = _list_backups(backup_dir, style_path)
         except (AttributeError, OSError, TypeError, ValueError) as error:
@@ -387,13 +396,14 @@ def api_style_editor(demo: gr.Blocks | None, app: FastAPI):
         try:
             with SAVE_LOCK:
                 backup_path = _create_backup(style_path, backup_dir, "manual")
-                _cleanup_backups(backup_dir, style_path, backup_count, backup_path)
+                cleanup_warning = _cleanup_backups_warning(backup_dir, style_path, backup_count, backup_path)
         except OSError as error:
             return _error(f"Could not back up styles.csv: {error}", 500)
 
         return {
             "backup_file": backup_path.name,
             "backup_folder": str(backup_dir),
+            "cleanup_warning": cleanup_warning,
         }
 
     @router.post("/restore")
@@ -419,7 +429,7 @@ def api_style_editor(demo: gr.Blocks | None, app: FastAPI):
                     safety_backup_name = safety_backup_path.name
                 restored_styles, revision = _restore_atomic(backup_path, style_path, payload.get("revision"))
                 # Retention runs only after replacement. Failed restores keep the safety copy.
-                _cleanup_backups(backup_dir, style_path, backup_count, safety_backup_path or backup_path)
+                cleanup_warning = _cleanup_backups_warning(backup_dir, style_path, backup_count, safety_backup_path or backup_path)
                 reload_warning = _reload_host_styles()
         except RevisionConflict as error:
             return _error(str(error), 409)
@@ -435,6 +445,7 @@ def api_style_editor(demo: gr.Blocks | None, app: FastAPI):
             "folder": str(backup_dir),
             "restart_required": bool(reload_warning),
             "reload_warning": reload_warning,
+            "cleanup_warning": cleanup_warning,
         }
 
     @router.post("/save")
@@ -454,6 +465,7 @@ def api_style_editor(demo: gr.Blocks | None, app: FastAPI):
             return _error(f"styles.csv not found: {style_path}", 404)
 
         backup_name = None
+        cleanup_warning = None
         try:
             with SAVE_LOCK:
                 _check_revision(style_path, payload.get("revision"))
@@ -463,7 +475,7 @@ def api_style_editor(demo: gr.Blocks | None, app: FastAPI):
 
                 revision = _write_styles(style_path, styles, payload.get("revision"))
                 if backup_enabled:
-                    _cleanup_backups(backup_dir, style_path, backup_count, backup_path)
+                    cleanup_warning = _cleanup_backups_warning(backup_dir, style_path, backup_count, backup_path)
                 reload_warning = _reload_host_styles()
         except RevisionConflict as error:
             return _error(str(error), 409)
@@ -478,6 +490,7 @@ def api_style_editor(demo: gr.Blocks | None, app: FastAPI):
             "backup_folder": str(backup_dir),
             "restart_required": bool(reload_warning),
             "reload_warning": reload_warning,
+            "cleanup_warning": cleanup_warning,
         }
 
     app.include_router(router)

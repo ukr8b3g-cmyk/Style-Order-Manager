@@ -1,0 +1,89 @@
+name: Regression checks and v1.0.0 release
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      SOM_HOST_ROOT: ${{ github.workspace }}/.ci-host
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out the tested host authentication source without importing GPU code
+        uses: actions/checkout@v4
+        with:
+          repository: Haoming02/sd-webui-forge-classic
+          ref: 0c388f8b26d26d475c2c7104aea4eafdf7bbb3e7
+          path: .ci-host
+          sparse-checkout: modules/api/api.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install isolated test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install gradio==4.40.0 fastapi==0.127.1 httpx==0.28.1 huggingface-hub==0.36.2 pydantic==2.10.6
+          if ($LASTEXITCODE -ne 0) { throw 'Python test dependency install failed' }
+          npm install --prefix "$env:RUNNER_TEMP/som-node" playwright@1.62.1
+          if ($LASTEXITCODE -ne 0) { throw 'Browser test dependency install failed' }
+          "NODE_PATH=$env:RUNNER_TEMP/som-node/node_modules" >> $env:GITHUB_ENV
+      - name: Python regression and authentication tests
+        run: python -B -m unittest discover -s tests -v
+      - name: JavaScript syntax
+        shell: pwsh
+        run: |
+          node --check javascript/style_order_manager.js
+          if ($LASTEXITCODE -ne 0) { throw 'JavaScript syntax failed' }
+      - name: Existing browser scenarios
+        run: node tests/test_style_order_manager_ui.cjs
+      - name: Backup regression browser scenarios
+        run: node tests/test_review_regressions_ui.cjs
+
+  publish_v1_0_0:
+    needs: test
+    if: >-
+      github.repository == 'ukr8b3g-cmyk/Style-Order-Manager' &&
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      github.event.head_commit.message == 'Release v1.0.0: make backup completion and restore selection safe'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish v1.0.0 without overwriting an existing release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const repo = {...context.repo};
+            const tag = 'v1.0.0';
+            let existing, ref;
+            try { existing = (await github.rest.repos.getReleaseByTag({...repo, tag})).data; }
+            catch (error) { if (error.status !== 404) throw error; }
+            try { ref = (await github.rest.git.getRef({...repo, ref: `tags/${tag}`})).data; }
+            catch (error) { if (error.status !== 404) throw error; }
+            if (ref && (ref.object.type !== 'commit' || ref.object.sha !== context.sha)) {
+              throw new Error('Existing tag differs; refusing to replace it');
+            }
+            if (existing) {
+              if (!ref || existing.draft || existing.prerelease) throw new Error('Existing release is inconsistent');
+              core.info(existing.html_url);
+              return;
+            }
+            const release = await github.rest.repos.createRelease({
+              ...repo, tag_name: tag, target_commitish: context.sha,
+              name: 'v1.0.0 — Backup completion and restore selection fixes',
+              body: fs.readFileSync('docs/RELEASE_v1.0.0.md', 'utf8'),
+              draft: false, prerelease: false
+            });
+            core.info(release.data.html_url);

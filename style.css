@@ -163,6 +163,7 @@
 
 .style-editor-status.working { opacity: 0.8; }
 .style-editor-status.success { color: #237a3b; }
+.style-editor-status.warning { color: #9a6700; }
 .style-editor-status.error { color: #b3261e; }
 
 .style-editor-help {

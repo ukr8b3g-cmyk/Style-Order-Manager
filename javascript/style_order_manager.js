@@ -63,7 +63,9 @@
             noMatches: "検索条件に一致するスタイルがありません。",
             reloadConfirm: "未保存の変更を破棄して styles.csv を再読込しますか？",
             deleteConfirm: "「{name}」を削除しますか？",
-            restoreConfirm: "現在の styles.csv を安全用バックアップにしてから「{name}」をリストアしますか？",
+            restoreConfirm: "現在の styles.csv を安全用バックアップにしてから「{name}」をリストアしますか？\n保存先: {folder}",
+            cleanupWarning: " バックアップの世代整理に失敗しました（操作は完了済み）: {message}",
+            backupsNotReady: "保存先のバックアップ一覧を更新してからリストアしてください。",
             restoreDirtyConfirm: "未保存の編集は破棄されます。{confirm}",
             restoredMissing: "リストアしました。元のCSVがなかったため復元前バックアップはありません。",
             folderChanged: "バックアップ保存先を変更しました。",
@@ -137,7 +139,9 @@
             noMatches: "No styles match the search.",
             reloadConfirm: "Discard unsaved changes and reload styles.csv?",
             deleteConfirm: "Delete “{name}”?",
-            restoreConfirm: "Back up the current styles.csv, then restore “{name}”?",
+            restoreConfirm: "Back up the current styles.csv, then restore “{name}”?\nFolder: {folder}",
+            cleanupWarning: " Backup retention failed (the operation completed): {message}",
+            backupsNotReady: "Refresh the backups for this folder before restoring.",
             restoreDirtyConfirm: "Unsaved edits will be discarded. {confirm}",
             restoredMissing: "Restored. There was no current CSV to back up.",
             folderChanged: "Backup folder changed.",
@@ -185,6 +189,9 @@
         backups: [],
         revision: null,
         backupsRequest: 0,
+        backupsLoading: false,
+        backupsInputFolder: null,
+        backupsFolder: null,
     };
 
     let root = null;
@@ -303,10 +310,7 @@
             const button = root.querySelector(selector);
             if (button) button.disabled = busy;
         });
-        const restoreButton = root.querySelector("#style-editor-restore");
-        const backupSelect = root.querySelector("#style-editor-backup-select");
-        if (restoreButton) restoreButton.disabled = busy || !backupSelect?.value;
-        if (backupSelect) backupSelect.disabled = busy;
+        updateRestoreButton();
         root.querySelector("#style-editor-search").disabled = busy;
         ["#style-editor-language", "#style-editor-backup-enabled", "#style-editor-backup-count", "#style-editor-backup-folder"].forEach((selector) => {
             root.querySelector(selector).disabled = busy;
@@ -415,15 +419,40 @@
         return data;
     }
 
+    function currentBackupFolder() {
+        return root.querySelector("#style-editor-backup-folder").value.trim() || DEFAULT_BACKUP_FOLDER;
+    }
+
+    function backupSelectionIsCurrent() {
+        const select = root.querySelector("#style-editor-backup-select");
+        return !state.backupsLoading && state.backupsInputFolder === currentBackupFolder()
+            && Boolean(state.backupsFolder) && state.backups.some(backup => backup.name === select?.value);
+    }
+
     function updateRestoreButton() {
         const select = root.querySelector("#style-editor-backup-select");
         const restore = root.querySelector("#style-editor-restore");
-        if (restore) restore.disabled = state.busy || !select?.value;
+        if (restore) restore.disabled = state.busy || !backupSelectionIsCurrent();
+        if (select) select.disabled = state.busy || state.backupsLoading || state.backupsInputFolder !== currentBackupFolder();
+    }
+
+    function invalidateBackups() {
+        state.backupsRequest += 1;
+        state.backups = [];
+        state.backupsInputFolder = null;
+        state.backupsFolder = null;
+        state.backupsLoading = false;
+        root.querySelector("#style-editor-backup-select").innerHTML = `<option value="">${escapeHtml(t("noBackups"))}</option>`;
+        root.querySelector("#style-editor-backup-summary").textContent = "";
+        updateRestoreButton();
     }
 
     async function loadBackups() {
-        const requestId = ++state.backupsRequest;
-        const folder = root.querySelector("#style-editor-backup-folder").value.trim() || DEFAULT_BACKUP_FOLDER;
+        invalidateBackups();
+        const requestId = state.backupsRequest;
+        const folder = currentBackupFolder();
+        state.backupsLoading = true;
+        updateRestoreButton();
         const select = root.querySelector("#style-editor-backup-select");
         const summary = root.querySelector("#style-editor-backup-summary");
         try {
@@ -431,8 +460,11 @@
                 method: "POST",
                 body: JSON.stringify({ backup_folder: folder }),
             });
-            if (requestId !== state.backupsRequest) return;
+            if (requestId !== state.backupsRequest || folder !== currentBackupFolder()) return;
+            if (typeof data.folder !== "string" || !data.folder.trim()) throw new Error("Backup folder is missing");
             state.backups = data.backups || [];
+            state.backupsInputFolder = folder;
+            state.backupsFolder = data.folder;
             select.innerHTML = state.backups.length
                 ? state.backups.map((backup) => {
                     const locale = state.language === "ja" ? "ja-JP" : "en-US";
@@ -441,14 +473,24 @@
                 }).join("")
                 : `<option value="">${escapeHtml(t("noBackups"))}</option>`;
             summary.textContent = t("backupCount", { count: state.backups.length });
-            updateRestoreButton();
         } catch (error) {
             if (requestId !== state.backupsRequest) return;
             state.backups = [];
+            state.backupsInputFolder = null;
+            state.backupsFolder = null;
             select.innerHTML = `<option value="">${escapeHtml(t("backupListError"))}</option>`;
             summary.textContent = t("backupListError");
-            updateRestoreButton();
+        } finally {
+            if (requestId === state.backupsRequest) {
+                state.backupsLoading = false;
+                updateRestoreButton();
+            }
         }
+    }
+
+    function showCommittedStatus(message, data) {
+        if (data.cleanup_warning) message += t("cleanupWarning", {message: data.cleanup_warning});
+        setStatus(message, data.cleanup_warning ? "warning" : "success");
     }
 
     async function browseBackupFolder() {
@@ -493,7 +535,7 @@
                 body: JSON.stringify({ backup_folder: backupFolder, backup_count: backupCount }),
             });
             await loadBackups();
-            setStatus(t("backupCreated", { file: data.backup_file }), "success");
+            showCommittedStatus(t("backupCreated", { file: data.backup_file }), data);
         } catch (error) {
             setStatus(t("backupCreateError", { message: error.message }), "error");
         } finally {
@@ -505,12 +547,16 @@
     async function restoreBackup() {
         if (state.busy) return;
         const select = root.querySelector("#style-editor-backup-select");
+        if (!backupSelectionIsCurrent()) {
+            setStatus(t("backupsNotReady"), "warning");
+            return;
+        }
         const backupName = select.value;
-        if (!backupName) return;
-        const confirm = t("restoreConfirm", { name: backupName });
+        const folder = state.backupsFolder;
+        const confirm = t("restoreConfirm", { name: backupName, folder });
         if (!window.confirm(state.dirty ? t("restoreDirtyConfirm", { confirm }) : confirm)) return;
 
-        const folder = root.querySelector("#style-editor-backup-folder").value.trim() || DEFAULT_BACKUP_FOLDER;
+        if (!backupSelectionIsCurrent() || select.value !== backupName || state.backupsFolder !== folder) return;
         const count = Math.min(100, Math.max(1, Number(root.querySelector("#style-editor-backup-count").value) || 10));
         setBusy(true);
         setStatus(t("restoring"), "working");
@@ -527,7 +573,7 @@
             await loadBackups();
             const refreshed = data.restart_required ? 0 : refreshForgeStyleControls();
             const message = data.safety_backup_file ? t("restored", { file: data.safety_backup_file }) : t("restoredMissing");
-            setStatus(message + t(data.restart_required ? "restartNeeded" : refreshed ? "stylesRefreshed" : "stylesRefreshManual"), "success");
+            showCommittedStatus(message + t(data.restart_required ? "restartNeeded" : refreshed ? "stylesRefreshed" : "stylesRefreshManual"), data);
         } catch (error) {
             setStatus(t("restoreError", { message: error.message }), "error");
         } finally {
@@ -615,7 +661,7 @@
             const reloadMessage = data.restart_required
                 ? t("restartNeeded")
                 : t(refreshedControls ? "stylesRefreshed" : "stylesRefreshManual");
-            setStatus(`${t("savedMessage")}${backupMessage}${reloadMessage}`, "success");
+            showCommittedStatus(`${t("savedMessage")}${backupMessage}${reloadMessage}`, data);
         } catch (error) {
             setStatus(t("saveError", { message: error.message }), "error");
         } finally {
@@ -747,7 +793,7 @@
         const backupFolder = root.querySelector("#style-editor-backup-folder");
         backupEnabled.addEventListener("change", () => { updateBackupControls(); persistSettings(); });
         backupCount.addEventListener("input", persistSettings);
-        backupFolder.addEventListener("input", persistSettings);
+        backupFolder.addEventListener("input", () => { invalidateBackups(); persistSettings(); });
         backupFolder.addEventListener("change", loadBackups);
         root.querySelector("#style-editor-backup-now").addEventListener("click", createBackupNow);
         root.querySelector("#style-editor-browse-backup").addEventListener("click", browseBackupFolder);

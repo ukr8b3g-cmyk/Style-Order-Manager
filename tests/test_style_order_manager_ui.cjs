@@ -37,7 +37,7 @@ const initialStyles = [
             apiCalls.push({ action, payload: route.request().postDataJSON() });
             let data;
             if (action === "/reload" || action === "/styles") data = { styles: rows, revision, file: "styles.csv" };
-            else if (action === "/backups") data = { backups };
+            else if (action === "/backups") data = { backups, folder: route.request().postDataJSON().backup_folder };
             else if (action === "/save") {
                 if (delayedSave) await new Promise(resolve => { saveRelease = resolve; });
                 if (conflict) return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "stale" }) });
