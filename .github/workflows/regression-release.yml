@@ -54,7 +54,7 @@ jobs:
     if: >-
       github.repository == 'ukr8b3g-cmyk/Style-Order-Manager' &&
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-      github.event.head_commit.message == 'Release v1.0.0: make backup completion and restore selection safe'
+      github.event.head_commit.message == 'Release v1.0.0: fix Windows fault-injection path comparison'
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -114,7 +114,7 @@ class StyleTests(unittest.TestCase):
         real_copy = som.shutil.copyfileobj
 
         def fail_restore(src, dst):
-            if str(src.name) == str(source):
+            if Path(src.name).resolve() == source.resolve():
                 dst.write(b"partial")
                 raise OSError("disk full")
             return real_copy(src, dst)
