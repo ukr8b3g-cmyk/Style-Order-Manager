@@ -26,7 +26,7 @@
             statusMissing: "{file} がありません。バックアップを選んでリストアできます。",
             conflict: "別のタブまたは外部で styles.csv が変更されました。未保存の編集は保持しています。編集を控えてから一覧を再読込し、変更を適用し直してください。",
             statusReadError: "読込エラー: {message}",
-            help: "↑↓で1段ずつ移動、☷をドラッグして並べ替え、▶で編集欄を展開します。編集内容は「保存」するまで styles.csv に反映されません。",
+            help: "↑↓で1段ずつ移動、☷をドラッグして並べ替え、見出しをクリックして編集欄を開閉します。編集内容は「保存」するまで styles.csv に反映されません。",
             backupSettings: "バックアップ設定",
             backupEnabled: "保存時にバックアップを作成",
             backupNow: "今すぐバックアップ",
@@ -102,7 +102,7 @@
             statusMissing: "{file} is missing. Select a backup to restore it.",
             conflict: "Another tab or external writer changed styles.csv. Your unsaved edits are retained. Copy them before reloading the list, then apply them again.",
             statusReadError: "Read error: {message}",
-            help: "Use ↑↓ to move one step, drag ☷ to reorder, and use ▶ to expand the editor. Changes are not written to styles.csv until you press Save.",
+            help: "Use ↑↓ to move one step, drag ☷ to reorder, and click the heading to open or close the editor. Changes are not written to styles.csv until you press Save.",
             backupSettings: "Backup settings",
             backupEnabled: "Create a backup when saving",
             backupNow: "Back up now",
@@ -821,7 +821,8 @@
             const index = Number(card.dataset.index);
             const style = state.styles[index];
             if (!style) return;
-            const actionButton = event.target.closest("[data-action]");
+            const actionButton = event.target.closest("[data-action]")
+                || event.target.closest(".style-editor-card-heading")?.querySelector('[data-action="toggle"]');
             if (!actionButton) return;
             const action = actionButton.dataset.action;
 
