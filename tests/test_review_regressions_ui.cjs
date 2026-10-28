@@ -33,6 +33,11 @@ const canonical = folder => `C:/isolated/${folder}`;
         data = {backups: [{name: BACKUP, modified: 1}], folder: canonical(payload.backup_folder)};
         gate = gates.find(g => !g.used && g.folder === payload.backup_folder);
         if (gate) { gate.used = true; gate.reached(); await gate.wait; }
+      } else if (action === '/next-name') {
+        const used = new Set(payload.names.map(name => name.toLowerCase()));
+        let name = payload.base, suffix = 2;
+        while (used.has(name.toLowerCase())) name = `${payload.base} ${suffix++}`;
+        data = {name};
       } else if (action === '/save') {
         assert.equal(payload.revision, revision);
         styles = payload.styles; revision += '-saved';

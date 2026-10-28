@@ -148,3 +148,13 @@ The WebUI Extensions tab obtains its available-extension list from an external J
 ## License
 
 The maintainer-authored code, documentation, and project materials are licensed under the [MIT License](LICENSE). See [NOTICE.md](NOTICE.md) for the scope and third-party rights.
+
+### Style name identity
+
+Names retain their leading/trailing whitespace. Blank names are rejected;
+case-insensitive uniqueness uses Python `casefold()` on the server. The UI only
+performs conservative ASCII early checks and preserves the draft on server rejection.
+New style names are allocated by the authenticated, read-only `/next-name` endpoint
+against the current draft, including Unicode names. Failed requests leave the draft
+unchanged. Reload/restart Forge after updating the backend and refresh the browser;
+no existing names are renamed or migrated.

@@ -44,6 +44,8 @@ jobs:
         run: |
           node --check javascript/style_order_manager.js
           if ($LASTEXITCODE -ne 0) { throw 'JavaScript syntax failed' }
+      - name: Name policy regression
+        run: node --test tests/test_name_policy.cjs
       - name: Existing browser scenarios
         run: node tests/test_style_order_manager_ui.cjs
       - name: Backup regression browser scenarios

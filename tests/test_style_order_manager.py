@@ -252,7 +252,7 @@ class AuthTests(unittest.TestCase):
 
     def assert_all_routes(self, client, expected):
         routes = [r for r in client.app.routes if getattr(r, "path", "").startswith(som.API_PREFIX)]
-        self.assertEqual(len(routes), 7)
+        self.assertEqual(len(routes), 8)
         with patch.object(som, "_style_path", side_effect=AssertionError("unauthorized side effect")):
             for route in routes:
                 method = next(iter(route.methods))
@@ -263,6 +263,7 @@ class AuthTests(unittest.TestCase):
         folder = str(Path(self.temp.name) / "authorized-backups")
         payload = {"backup_folder": folder, "backup_count": 10}
         self.assertEqual(client.get(som.API_PREFIX + "/styles", **options).status_code, 200)
+        self.assertEqual(client.post(som.API_PREFIX + "/next-name", json={"base": "New Style", "names": []}, **options).status_code, 200)
         self.assertEqual(client.post(som.API_PREFIX + "/reload", **options).status_code, 200)
         self.assertEqual(client.post(som.API_PREFIX + "/backups", json=payload, **options).status_code, 200)
         with patch.object(som, "_pick_backup_folder", return_value=folder):

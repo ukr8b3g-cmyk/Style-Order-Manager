@@ -76,6 +76,7 @@
             restoreError: "リストアエラー: {message}",
             saving: "styles.csv を保存しています...",
             saveError: "保存エラー: {message}",
+            addError: "追加エラー: {message}",
             backupMessage: " バックアップ: {file}",
             restartNeeded: " Forgeの再起動が必要です。",
             stylesRefreshed: " Styles一覧を自動更新しました。",
@@ -152,6 +153,7 @@
             restoreError: "Restore error: {message}",
             saving: "Saving styles.csv...",
             saveError: "Save error: {message}",
+            addError: "Could not add style: {message}",
             backupMessage: " Backup: {file}",
             restartNeeded: " Forge must be restarted.",
             stylesRefreshed: " Refreshed the Styles lists automatically.",
@@ -603,12 +605,18 @@
         }
     }
 
+    function earlyStyleNameKey(name) {
+        // Only certain ASCII folds are checked locally. Do not trim names or
+        // invent a partial Unicode casefold; the server remains authoritative.
+        return name.replace(/[A-Z]/g, char => char.toLowerCase());
+    }
+
     function validateStyles() {
         const seen = new Set();
         for (let index = 0; index < state.styles.length; index += 1) {
             const style = state.styles[index];
             if (!style.name.trim()) return t("emptyStyleName", { index: index + 1 });
-            const key = style.name.trim().toLocaleLowerCase();
+            const key = earlyStyleNameKey(style.name);
             if (seen.has(key)) return t("duplicateStyle", { name: style.name });
             seen.add(key);
         }
@@ -670,25 +678,34 @@
         }
     }
 
-    function nextStyleName() {
-        const names = new Set(state.styles.map((style) => style.name));
-        let candidate = t("newStyle");
-        let suffix = 2;
-        while (names.has(candidate)) candidate = `${t("newStyle")} ${suffix++}`;
-        return candidate;
+    async function nextStyleName() {
+        const data = await request("/next-name", {
+            method: "POST",
+            body: JSON.stringify({base: t("newStyle"), names: state.styles.map(style => style.name)}),
+        });
+        if (typeof data.name !== "string" || !data.name.trim()) throw new Error("Invalid style name response");
+        return data.name;
     }
 
-    function addStyle() {
+    async function addStyle() {
         if (state.busy) return;
-        const style = makeStyle({ name: nextStyleName(), prompt: "", negative_prompt: "" });
-        state.styles.push(style);
-        state.expanded.add(style.id);
-        state.query = "";
-        root.querySelector("#style-editor-search").value = "";
-        markDirty();
-        render();
-        const card = [...root.querySelectorAll(".style-editor-card")].find((item) => item.dataset.id === style.id);
-        card?.querySelector('[data-field="name"]')?.focus();
+        setBusy(true);
+        try {
+            const name = await nextStyleName();
+            const style = makeStyle({ name, prompt: "", negative_prompt: "" });
+            state.styles.push(style);
+            state.expanded.add(style.id);
+            state.query = "";
+            root.querySelector("#style-editor-search").value = "";
+            markDirty();
+            render();
+            const card = [...root.querySelectorAll(".style-editor-card")].find(item => item.dataset.id === style.id);
+            card?.querySelector('[data-field="name"]')?.focus();
+        } catch (error) {
+            setStatus(t("addError", {message: error.message}), "error");
+        } finally {
+            setBusy(false);
+        }
     }
 
     function moveStyle(fromIndex, targetIndex, insertAfter) {

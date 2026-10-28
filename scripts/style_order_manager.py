@@ -126,6 +126,25 @@ def _write_styles(style_path: Path, styles: list[dict[str, str]], expected_revis
             os.unlink(temporary_name)
 
 
+def _style_name_key(name: str) -> str:
+    # Preserve whitespace and existing CSV names; casefold is the final identity.
+    return name.casefold()
+
+
+def _next_style_name(base, names) -> str:
+    if not isinstance(base, str) or not base.strip() or "\x00" in base:
+        raise ValueError("Invalid new style base name")
+    if not isinstance(names, list) or any(not isinstance(name, str) for name in names):
+        raise ValueError("Style names must be a list of strings")
+    existing = {_style_name_key(name) for name in names}
+    candidate = base
+    suffix = 2
+    while _style_name_key(candidate) in existing:
+        candidate = f"{base} {suffix}"
+        suffix += 1
+    return candidate
+
+
 def _normalise_styles(raw_styles) -> list[dict[str, str]]:
     if not isinstance(raw_styles, list):
         raise ValueError("styles must be a list")
@@ -149,7 +168,7 @@ def _normalise_styles(raw_styles) -> list[dict[str, str]]:
 
         if not values["name"].strip():
             raise ValueError(f"Style {index} has an empty name")
-        name_key = values["name"].casefold()
+        name_key = _style_name_key(values["name"])
         if name_key in seen_names:
             raise ValueError(f"Duplicate style name: {values['name']}")
         seen_names.add(name_key)
@@ -321,6 +340,15 @@ def _host_auth_dependencies(demo: gr.Blocks | None, app: FastAPI) -> list:
 
 def api_style_editor(demo: gr.Blocks | None, app: FastAPI):
     router = APIRouter(prefix=API_PREFIX, dependencies=_host_auth_dependencies(demo, app))
+
+    @router.post("/next-name")
+    async def next_name(payload: dict = Body(...)):
+        # Read-only allocation against the current draft, under the host auth
+        # dependencies of this router. No CSV read/write or host reload.
+        try:
+            return {"name": _next_style_name(payload.get("base"), payload.get("names"))}
+        except ValueError as error:
+            return _error(str(error), 400)
 
     @router.get("/styles")
     async def get_styles():

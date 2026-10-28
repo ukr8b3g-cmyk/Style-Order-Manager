@@ -38,6 +38,13 @@ const initialStyles = [
             let data;
             if (action === "/reload" || action === "/styles") data = { styles: rows, revision, file: "styles.csv" };
             else if (action === "/backups") data = { backups, folder: route.request().postDataJSON().backup_folder };
+            else if (action === "/next-name") {
+                const payload = route.request().postDataJSON();
+                const used = new Set(payload.names.map(name => name.toLowerCase()));
+                let name = payload.base, suffix = 2;
+                while (used.has(name.toLowerCase())) name = `${payload.base} ${suffix++}`;
+                data = {name};
+            }
             else if (action === "/save") {
                 if (delayedSave) await new Promise(resolve => { saveRelease = resolve; });
                 if (conflict) return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "stale" }) });
