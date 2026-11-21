@@ -20,6 +20,7 @@
             add: "＋ スタイル追加",
             reload: "一覧を再読込",
             save: "保存",
+            saveAllStyles: "未保存のスタイル変更をすべて保存",
             statusReady: "読み込み前",
             statusLoading: "styles.csv を再読込しています...",
             statusLoaded: "{file} を読み込みました。",
@@ -97,6 +98,7 @@
             add: "＋ Add style",
             reload: "Reload list",
             save: "Save",
+            saveAllStyles: "Save all unsaved style changes",
             statusReady: "Not loaded",
             statusLoading: "Reloading styles.csv...",
             statusLoaded: "Loaded {file}.",
@@ -298,6 +300,9 @@
         dirtyBadge.textContent = state.dirty ? t("unsaved") : t("saved");
         dirtyBadge.className = `style-editor-dirty ${state.dirty ? "is-dirty" : ""}`.trim();
         saveButton.disabled = state.busy || !state.dirty;
+        root.querySelectorAll('[data-action="save"]').forEach((button) => {
+            button.disabled = state.busy || !state.dirty;
+        });
     }
 
     function setBusy(busy) {
@@ -326,6 +331,7 @@
             card.querySelectorAll("input, textarea, button").forEach((control) => {
                 const action = control.dataset.action;
                 control.disabled = state.busy
+                    || action === "save" && !state.dirty
                     || action === "move-up" && index === 0
                     || action === "move-down" && index === state.styles.length - 1;
             });
@@ -353,6 +359,7 @@
                     <div class="style-editor-card-heading">
                         <button type="button" class="style-editor-toggle" data-action="toggle" title="${escapeHtml(t(expanded ? "collapse" : "expand"))}" aria-label="${escapeHtml(t(expanded ? "collapse" : "expand"))}" aria-expanded="${expanded}">${expanded ? "▼" : "▶"}</button>
                         <strong>${escapeHtml(style.name || t("unsetStyleName"))}</strong>
+                        <button type="button" class="style-editor-card-save primary" data-action="save" title="${escapeHtml(t("saveAllStyles"))}">${escapeHtml(t("save"))}</button>
                         <button type="button" class="style-editor-delete" data-action="delete">${escapeHtml(t("delete"))}</button>
                     </div>
                     <div class="style-editor-fields">
@@ -843,6 +850,10 @@
             if (!actionButton) return;
             const action = actionButton.dataset.action;
 
+            if (action === "save") {
+                await saveStyles();
+                return;
+            }
             if (action === "delete") {
                 if (!window.confirm(t("deleteConfirm", { name: style.name }))) return;
                 state.styles.splice(index, 1);
@@ -936,8 +947,8 @@
                 <label id="style-editor-search-label" class="style-editor-search-label" for="style-editor-search"></label>
                 <input id="style-editor-search" type="search" autocomplete="off">
                 <button id="style-editor-add" type="button"></button>
-                <button id="style-editor-reload" type="button"></button>
                 <button id="style-editor-save" type="button" class="primary" disabled></button>
+                <button id="style-editor-reload" type="button"></button>
             </div>
             <div id="style-editor-status" class="style-editor-status"></div>
             <p id="style-editor-help" class="style-editor-help"></p>
