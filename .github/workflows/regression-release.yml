@@ -1,4 +1,4 @@
-name: Regression checks and v1.0.0 release
+name: Regression checks and v1.1.0 release
 
 on:
   push:
@@ -51,24 +51,23 @@ jobs:
       - name: Backup regression browser scenarios
         run: node tests/test_review_regressions_ui.cjs
 
-  publish_v1_0_0:
+  publish_v1_1_0:
     needs: test
     if: >-
       github.repository == 'ukr8b3g-cmyk/Style-Order-Manager' &&
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-      github.event.head_commit.message == 'Release v1.0.0: fix Windows fault-injection path comparison'
+      github.event.head_commit.message == 'Release v1.1.0: add style sets and compact editing'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Publish v1.0.0 without overwriting an existing release
+      - name: Publish v1.1.0 without overwriting an existing release
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
             const repo = {...context.repo};
-            const tag = 'v1.0.0';
+            const tag = 'v1.1.0';
             let existing, ref;
             try { existing = (await github.rest.repos.getReleaseByTag({...repo, tag})).data; }
             catch (error) { if (error.status !== 404) throw error; }
@@ -84,8 +83,22 @@ jobs:
             }
             const release = await github.rest.repos.createRelease({
               ...repo, tag_name: tag, target_commitish: context.sha,
-              name: 'v1.0.0 — Backup completion and restore selection fixes',
-              body: fs.readFileSync('docs/RELEASE_v1.0.0.md', 'utf8'),
+              name: 'v1.1.0 — Style sets and compact editing',
+              body: [
+                '## 日本語',
+                '',
+                '- 名前付きのスタイルセットを作成・改名・並べ替えできます。カードから別セットに移動・コピーできます。',
+                '- Forge Neo の txt2img・img2img では「すべて」が初期表示です。絞り込みを変えても選択済みのスタイルは残り、管理画面でセットを切り替えても生成画面の絞り込みは維持されます。',
+                '- 見出しの鉛筆からスタイル名を編集できます。コピーは青緑、ペーストは紫で表示し、保存後もカードを開いたまま編集できます。',
+                '',
+                '## English',
+                '',
+                '- Create, rename, and reorder style sets. Move or copy styles to another set from the card.',
+                '- Forge Neo starts with all sets in txt2img and img2img. Filtering preserves selected styles, and switching sets in the manager preserves the generation filter.',
+                '- Edit the style name in the card header. Copy is teal, Paste is purple, and the card stays open after saving.',
+                '',
+                'See [the README](https://github.com/ukr8b3g-cmyk/Style-Order-Manager/blob/v1.1.0/README.md) for storage and usage details.'
+              ].join('\n'),
               draft: false, prerelease: false
             });
             core.info(release.data.html_url);

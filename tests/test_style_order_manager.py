@@ -10,6 +10,7 @@ import sys
 import tempfile
 import types
 import unittest
+from collections import namedtuple
 from unittest.mock import Mock, patch
 
 import gradio as gr
@@ -23,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 shared = types.ModuleType("modules.shared")
 shared.cmd_opts = types.SimpleNamespace(api_auth=None)
 callbacks = types.ModuleType("modules.script_callbacks")
+callbacks.on_after_component = lambda callback: None
 callbacks.on_app_started = lambda callback: None
 callbacks.on_ui_tabs = lambda callback: None
 modules = types.ModuleType("modules")
@@ -43,6 +45,36 @@ def gradio_host(auth=None):
     return demo, App.create_app(demo)
 
 
+class AllGenerationStylesTests(unittest.TestCase):
+    def test_order_duplicate_names_and_native_storage(self):
+        row = namedtuple("Row", "name prompt negative_prompt path")
+        native = {"Shared": row("Shared", "p1", "n1", "primary.csv"),
+                  "Extra": row("Extra", "external", "", "external.csv")}
+        db = types.SimpleNamespace(default_path="primary.csv", styles=native.copy(),
+                                   no_style=row("None", "", "", None))
+        catalog = {"active": "first", "sets": {
+            "second": {"name": "Other", "styles": [{"name": "Shared", "prompt": "p2", "negative_prompt": "n2"}]},
+            "first": {"name": "Common"},
+        }}
+        choices = som._all_generation_choices(db, catalog)
+        self.assertEqual([name for name, _ in choices], ["Shared  [Other]", "Shared  [Common]", "Extra"])
+        other, common, extra = [key for _, key in choices]
+        self.assertEqual(db.styles.get(other).negative_prompt, "n2")
+        self.assertEqual(db.styles[common].prompt, "p1")
+        self.assertEqual(db.styles[extra].prompt, "external")
+        self.assertEqual(dict(db.styles.items()), native)
+        self.assertEqual(som._all_generation_choices(db, catalog), choices)
+        with patch.object(shared, "prompt_styles", db, create=True), patch.object(db, "reload", create=True), \
+                patch.object(som, "_style_path", return_value=Path("primary.csv")), patch.object(som, "_catalog", return_value=catalog):
+            view, _ = som._generation_refresh([common, other], "second/1")
+            self.assertEqual(view["value"], [common, other])
+            self.assertEqual(view["choices"], choices)
+            view, _ = som._generation_refresh([other], "second/2")
+            self.assertNotIn(common, dict(view["choices"]).values())
+            self.assertEqual(db.styles.get(common).prompt, "p1")
+            self.assertEqual(db.styles.get(other).prompt, "p2")
+
+
 class StyleTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="som-test-")
@@ -58,8 +90,8 @@ class StyleTests(unittest.TestCase):
         self.client = TestClient(self.app)
         self.addCleanup(self.client.close)
 
-    def post(self, action, **payload):
-        return self.client.post(som.API_PREFIX + "/" + action, json={
+    def post(self, route, **payload):
+        return self.client.post(som.API_PREFIX + "/" + route, json={
             "backup_folder": str(self.backups), "backup_count": 1,
             "revision": som._revision(self.path), **payload,
         })
@@ -252,7 +284,7 @@ class AuthTests(unittest.TestCase):
 
     def assert_all_routes(self, client, expected):
         routes = [r for r in client.app.routes if getattr(r, "path", "").startswith(som.API_PREFIX)]
-        self.assertEqual(len(routes), 8)
+        self.assertEqual(len(routes), 9)
         with patch.object(som, "_style_path", side_effect=AssertionError("unauthorized side effect")):
             for route in routes:
                 method = next(iter(route.methods))

@@ -76,7 +76,7 @@ const initialStyles = [
         await page.locator('.style-editor-card [data-action="toggle"]').first().click();
         await page.locator('.style-editor-settings > summary').click();
         try {
-            await test({ page, apiCalls, delaySave: () => { delayedSave = true; }, releaseSave: () => saveRelease(), setConflict: () => { conflict = true; } });
+            await test({ page, apiCalls, delaySave: () => { delayedSave = true; }, releaseSave: () => { delayedSave = false; saveRelease(); }, setConflict: () => { conflict = true; } });
             assert.deepEqual(errors, []);
             console.log(`PASS ${title}`);
             passed++;
@@ -112,7 +112,15 @@ const initialStyles = [
             assert.equal(await page.locator('.style-editor-card').count(), 2);
             assert.ok((await page.locator("#style-editor-backup-select").innerHTML()).includes("styles_20261001_180000_000001.csv"));
             assert.deepEqual(await page.evaluate(() => window.refreshClicks), ["refresh_txt2img_styles", "refresh_img2img_styles"]);
-            await page.locator('.style-editor-card [data-action="toggle"]').first().click();
+            const cards = page.locator(".style-editor-card");
+            assert.equal(await cards.first().locator('[data-action="toggle"]').getAttribute("aria-expanded"), "true");
+            assert.equal(await cards.last().locator('[data-action="toggle"]').getAttribute("aria-expanded"), "false");
+            await cards.last().locator('[data-action="toggle"]').click();
+            await cards.last().locator('[data-field="negative_prompt"]').fill("second card edit");
+            await cards.last().locator('[data-action="save"]').click();
+            await page.waitForFunction(() => document.querySelector("#style-order-manager-app").getAttribute("aria-busy") === "false");
+            assert.equal(await page.locator('.style-editor-card.is-expanded').count(), 2);
+            assert.equal(apiCalls.filter(c => c.action === "/save").at(-1).payload.styles[1].negative_prompt, "second card edit");
             await page.locator('[data-field="prompt"]').first().fill("next edit");
             assert.equal(await page.locator("#style-editor-save").isEnabled(), true);
         });

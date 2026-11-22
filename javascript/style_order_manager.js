@@ -10,6 +10,19 @@
 
     const I18N = {
         ja: {
+            catalogWarning: " セット情報の確定処理を次回に再試行します。{message}",
+            orderSets: "並べ替え", finishOrder: "完了", orderSaved: "セットの並び順を保存しました。",
+            shiftLeft: "「{name}」を左へ", shiftRight: "「{name}」を右へ", newDestination: "＋ 新しいセット…",
+            copiedTo: "「{name}」にコピーしました。",
+            allSets: "すべて", setPicker: "スタイルセット", sets: "スタイルセット", firstSet: "セット1", setBase: "セット", newSet: "セット追加",
+            renameSet: "名前変更", setName: "セット名", selectRows: "選択", finishSelect: "選択を終了",
+            selectedRows: "{count}件選択中", destination: "送り先", moveSet: "移動", copySet: "コピー",
+            dirtySwitch: "現在のセットに未保存の変更があります。", saveSwitch: "保存して切り替え",
+            discardSwitch: "変更を破棄して切り替え", cancel: "キャンセル",
+            saveTransfer: "現在の編集も保存して、選択したスタイルを送りますか？",
+            collision: "送り先の「{name}」と名前が重複しています。別の名前を入力してください。空欄でこの項目をスキップします。",
+            setReady: "使用中のセット：{name}", transferred: "「{name}」へ{count}件送りました。",
+            setConflict: "一覧またはセットが更新されました。編集内容を控えて一覧を再読込してください。",
             subtitle: "Forge Neo の styles.csv を一覧・編集・並べ替えします。",
             itemCount: "{count} 件",
             filteredCount: "{visible} / {total} 件",
@@ -58,6 +71,7 @@
             clipboardWriteError: "コピーできませんでした: {message}",
             clipboardReadError: "貼り付けできませんでした: {message}",
             styleName: "スタイル名",
+            editStyleName: "スタイル名を編集",
             positivePrompt: "ポジティブプロンプト",
             negativePrompt: "ネガティブプロンプト",
             unsetStyleName: "（名称未設定）",
@@ -88,6 +102,19 @@
             newStyle: "新しいスタイル",
         },
         en: {
+            catalogWarning: " Set metadata finalization will be retried on next access. {message}",
+            orderSets: "Reorder", finishOrder: "Done", orderSaved: "Set order saved.",
+            shiftLeft: "Move {name} left", shiftRight: "Move {name} right", newDestination: "+ New set…",
+            copiedTo: "Copied to “{name}”.",
+            allSets: "All", setPicker: "Style set", sets: "Style sets", firstSet: "Set 1", setBase: "Set ", newSet: "Add set",
+            renameSet: "Rename", setName: "Set name", selectRows: "Select", finishSelect: "Done selecting",
+            selectedRows: "{count} selected", destination: "Destination", moveSet: "Move", copySet: "Copy",
+            dirtySwitch: "The current set has unsaved changes.", saveSwitch: "Save and switch",
+            discardSwitch: "Discard and switch", cancel: "Cancel",
+            saveTransfer: "Save the current edits and transfer the selected styles?",
+            collision: "“{name}” already exists in the destination. Enter another name, or leave it blank to skip this style.",
+            setReady: "Active set: {name}", transferred: "Sent {count} style(s) to “{name}”.",
+            setConflict: "Styles or sets changed. Keep your edits and reload the list.",
             subtitle: "Browse, edit, and reorder Forge Neo's styles.csv.",
             itemCount: "{count} items",
             filteredCount: "{visible} / {total} items",
@@ -136,6 +163,7 @@
             clipboardWriteError: "Could not copy: {message}",
             clipboardReadError: "Could not paste: {message}",
             styleName: "Style name",
+            editStyleName: "Edit style name",
             positivePrompt: "Positive prompt",
             negativePrompt: "Negative prompt",
             unsetStyleName: "(unnamed)",
@@ -192,6 +220,10 @@
         suppressToggleUntil: 0,
         backups: [],
         revision: null,
+        sets: [], activeSet: null, setsRevision: null,
+        generationSet: "",
+        orderingSets: false,
+        selecting: false, selected: new Set(), destination: "",
         backupsRequest: 0,
         backupsLoading: false,
         backupsInputFolder: null,
@@ -322,13 +354,14 @@
         ["#style-editor-language", "#style-editor-backup-enabled", "#style-editor-backup-count", "#style-editor-backup-folder"].forEach((selector) => {
             root.querySelector(selector).disabled = busy;
         });
+        renderSets();
         lockRowControls();
     }
 
     function lockRowControls() {
         root.querySelectorAll(".style-editor-card").forEach((card) => {
             const index = Number(card.dataset.index);
-            card.querySelectorAll("input, textarea, button").forEach((control) => {
+            card.querySelectorAll("input, textarea, button, select").forEach((control) => {
                 const action = control.dataset.action;
                 control.disabled = state.busy
                     || action === "save" && !state.dirty
@@ -350,6 +383,7 @@
         const negativePromptId = `style-editor-negative-prompt-${style.id}`;
         return `
             <article class="style-editor-card ${expanded ? "is-expanded" : ""}" data-index="${index}" data-id="${escapeHtml(style.id)}">
+                ${state.selecting ? `<label class="style-set-check"><input type="checkbox" data-pick-style aria-label="${escapeHtml(style.name)}" ${state.selected.has(style.id) ? "checked" : ""}></label>` : ""}
                 <div class="style-editor-card-side">
                     <button type="button" class="style-editor-move-button" data-action="move-up" title="${escapeHtml(t("moveUp"))}" aria-label="${escapeHtml(t("moveUp"))}" ${index === 0 ? "disabled" : ""}>↑</button>
                     <button type="button" class="style-editor-move-button" data-action="move-down" title="${escapeHtml(t("moveDown"))}" aria-label="${escapeHtml(t("moveDown"))}" ${index === state.styles.length - 1 ? "disabled" : ""}>↓</button>
@@ -359,11 +393,13 @@
                     <div class="style-editor-card-heading">
                         <button type="button" class="style-editor-toggle" data-action="toggle" title="${escapeHtml(t(expanded ? "collapse" : "expand"))}" aria-label="${escapeHtml(t(expanded ? "collapse" : "expand"))}" aria-expanded="${expanded}">${expanded ? "▼" : "▶"}</button>
                         <strong>${escapeHtml(style.name || t("unsetStyleName"))}</strong>
+                        <button type="button" class="style-editor-edit-name" data-action="edit-name" title="${escapeHtml(t("editStyleName"))}" aria-label="${escapeHtml(t("editStyleName"))}">✎</button>
+                        <input type="text" class="style-editor-name" data-field="name" aria-label="${escapeHtml(t("styleName"))}" placeholder="${escapeHtml(t("styleName"))}" value="${escapeHtml(style.name)}" autocomplete="off">
                         <button type="button" class="style-editor-card-save primary" data-action="save" title="${escapeHtml(t("saveAllStyles"))}">${escapeHtml(t("save"))}</button>
                         <button type="button" class="style-editor-delete" data-action="delete">${escapeHtml(t("delete"))}</button>
                     </div>
                     <div class="style-editor-fields">
-                        <label>${escapeHtml(t("styleName"))}<input type="text" data-field="name" value="${escapeHtml(style.name)}" autocomplete="off"></label>
+                        ${expanded && state.sets.length ? cardTransferMarkup(style) : ""}
                         <div class="style-editor-field-group">
                             <div class="style-editor-field-heading">
                                 <label for="${escapeHtml(promptId)}">${escapeHtml(t("positivePrompt"))}</label>
@@ -390,6 +426,7 @@
     }
 
     function render() {
+        renderSets();
         const list = root.querySelector("#style-editor-list");
         const query = state.query.trim().toLocaleLowerCase();
         const matches = state.styles
@@ -421,7 +458,7 @@
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-            const error = new Error(response.status === 409 ? t("conflict") : data.error || data.detail || `HTTP ${response.status}`);
+            const error = new Error(response.status === 409 ? t(state.sets.length ? "setConflict" : "conflict") : data.error || data.detail || `HTTP ${response.status}`);
             error.status = response.status;
             throw error;
         }
@@ -499,7 +536,8 @@
 
     function showCommittedStatus(message, data) {
         if (data.cleanup_warning) message += t("cleanupWarning", {message: data.cleanup_warning});
-        setStatus(message, data.cleanup_warning ? "warning" : "success");
+        if (data.catalog_warning) message += t("catalogWarning", {message: data.catalog_warning});
+        setStatus(message, data.cleanup_warning || data.catalog_warning ? "warning" : "success");
     }
 
     async function browseBackupFolder() {
@@ -572,8 +610,9 @@
         try {
             const data = await request("/restore", {
                 method: "POST",
-                body: JSON.stringify({ backup_folder: folder, backup_name: backupName, backup_count: count, revision: state.revision }),
+                body: JSON.stringify({ backup_folder: folder, backup_name: backupName, backup_count: count, revision: state.revision, sets_revision: state.setsRevision }),
             });
+            state.selected.clear();
             state.styles = (data.styles || []).map(makeStyle);
             state.revision = data.revision;
             state.expanded.clear();
@@ -598,11 +637,14 @@
         setStatus(t("statusLoading"), "working");
         try {
             const data = await request("/reload", { method: "POST" });
+            readSets(data);
+            state.selected.clear();
             state.styles = (data.styles || []).map(makeStyle);
             state.revision = data.revision;
             state.expanded.clear();
             state.dirty = false;
             render();
+            refreshGenerationViews();
             setStatus(t(data.missing_file ? "statusMissing" : "statusLoaded", { file: data.file || "styles.csv" }), "success");
         } catch (error) {
             setStatus(t("statusReadError", { message: error.message }), "error");
@@ -632,7 +674,10 @@
 
     function refreshForgeStyleControls() {
         const refreshButtons = [...document.querySelectorAll('[id^="refresh_"][id$="_styles"]')];
-        refreshButtons.forEach((button) => button.click());
+        refreshButtons.forEach(button => {
+            const tab = button.id.replace(/^refresh_/, "").replace(/_styles$/, "");
+            if (!requestGenerationChoices(tab)) button.click();
+        });
         return refreshButtons.length;
     }
 
@@ -659,15 +704,17 @@
                 method: "POST",
                 body: JSON.stringify({
                     styles: state.styles.map(({ name, prompt, negative_prompt }) => ({ name, prompt, negative_prompt })),
+                    sets_revision: state.setsRevision,
                     revision: state.revision,
                     backup_enabled: enabled.checked,
                     backup_count: backupCount,
                     backup_folder: backupFolder,
                 }),
             });
-            state.styles = (data.styles || []).map(makeStyle);
+            state.selected.clear();
+            // The save response follows submission order. Keep each card's UI identity.
+            data.styles.forEach((saved, index) => Object.assign(state.styles[index], saved));
             state.revision = data.revision;
-            state.expanded.clear();
             state.dirty = false;
             render();
             await loadBackups();
@@ -795,7 +842,361 @@
         }
     }
 
+    function readSets(data) {
+        state.sets = data.sets || [];
+        if (!state.sets.some(set => set.id === state.generationSet)) state.generationSet = "";
+        state.activeSet = data.active_set;
+        state.setsRevision = data.sets_revision;
+    }
+
+    function setLabel(set) {
+        return set.name ?? t("firstSet");
+    }
+
+    function destinationOptions(sets, selected) {
+        return sets.map(set => `<option value="${escapeHtml(set.id)}" ${set.id === selected ? "selected" : ""}>${escapeHtml(setLabel(set))}</option>`).join("");
+    }
+
+    function cardTransferMarkup(style) {
+        const others = state.sets.filter(set => set.id !== state.activeSet);
+        return `<div class="style-editor-toolbar style-set-bar style-card-transfer">
+            <label>${t("destination")} <select data-card-destination>
+                ${destinationOptions(others, style.destination ?? state.destination)}
+                <option value="" ${style.destination === "" ? "selected" : ""}>${t("newDestination")}</option>
+            </select></label>
+            <button type="button" data-action="set-move">${t("moveSet")}</button>
+            <button type="button" data-action="set-copy">${t("copySet")}</button>
+            <span role="status">${style.copiedTo ? escapeHtml(t("copiedTo", {name: style.copiedTo})) : ""}</span>
+        </div>`;
+    }
+
+    function setTabMarkup(set, index) {
+        const id = escapeHtml(set.id);
+        const name = setLabel(set);
+        const disabled = state.busy ? "disabled" : "";
+        const tab = `<button type="button" data-set-id="${id}" draggable="${!state.busy}" aria-pressed="${set.id === state.activeSet}" ${disabled}>${escapeHtml(name)}</button>`;
+        if (!state.orderingSets) return tab;
+        const arrow = (step, label, symbol, edge) => `<button type="button" data-order-id="${id}" data-step="${step}" aria-label="${escapeHtml(t(label, {name}))}" ${state.busy || edge ? "disabled" : ""}>${symbol}</button>`;
+        return `<span class="style-set-order-group">${arrow(-1, "shiftLeft", "←", index === 0)}${tab}${arrow(1, "shiftRight", "→", index === state.sets.length - 1)}</span>`;
+    }
+
+    async function reorderSet(id, position) {
+        const order = state.sets.map(set => set.id);
+        const from = order.indexOf(id);
+        if (state.busy || from < 0 || position < 0 || position >= order.length || from === position) return;
+        order.splice(from, 1);
+        order.splice(position, 0, id);
+        setBusy(true);
+        try {
+            readSets(await request("/sets", {method: "POST", body: JSON.stringify({
+                action: "reorder", order, sets_revision: state.setsRevision,
+            })}));
+            render();
+            refreshGenerationViews();
+            setStatus(t("orderSaved"), "success");
+        } catch (error) {
+            setStatus(error.message, "error");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    let generationRequest = 0;
+    const pendingGenerationViews = new Map();
+
+    function requestGenerationChoices(tab) {
+        const input = document.querySelector(`#som_${tab}_style_view textarea, #som_${tab}_style_view input`);
+        const field = document.getElementById(tab + "_styles");
+        if (!input || !field || !input.closest(".som-independent-view")) return false;
+        if (pendingGenerationViews.has(tab)) {
+            pendingGenerationViews.set(tab, true);
+            return true;
+        }
+        pendingGenerationViews.set(tab, false);
+        // A click on the old choices while Gradio is replacing them would be lost.
+        field.inert = true;
+        document.addEventListener(`som-${tab}-choices-ready`, () => {
+            const again = pendingGenerationViews.get(tab);
+            pendingGenerationViews.delete(tab);
+            field.inert = false;
+            if (again) requestGenerationChoices(tab);
+        }, {once: true});
+        const view = state.generationSet || "all";
+        input.value = `${view}/${++generationRequest}`;
+        input.dispatchEvent(new Event("input", {bubbles: true}));
+        return true;
+    }
+
+    function bindNativeStyleRefresh(tab) {
+        // Forge's own refresh button normally resets the generation dropdown to the active CSV.
+        const refresh = document.getElementById("refresh_" + tab + "_styles");
+        if (refresh && !refresh.dataset.somRefresh) {
+            refresh.dataset.somRefresh = "true";
+            refresh.addEventListener("click", event => {
+                if (requestGenerationChoices(tab)) event.stopImmediatePropagation();
+            }, true);
+        }
+        const field = document.getElementById(tab + "_styles");
+        const dialog = document.getElementById(tab + "_styles_dialog");
+        if (!field || !dialog || field.dataset.somEditRefresh) return;
+        field.dataset.somEditRefresh = "true";
+        let edited = false;
+        dialog.addEventListener("click", event => {
+            const button = event.target.closest("button");
+            if (button && [tab + "_edit_style_save", tab + "_edit_style_delete"].includes(button.id)) edited = true;
+        });
+        field.addEventListener("focusin", () => {
+            if (edited) requestGenerationChoices(tab);
+            edited = false;
+        });
+    }
+
+    function refreshGenerationViews() {
+        for (const tab of ["txt2img", "img2img"]) {
+            requestGenerationChoices(tab);
+        }
+    }
+
+    function setGenerationView(setId) {
+        if (state.generationSet === setId || state.busy) return;
+        state.generationSet = setId;
+        syncGenerationSetPickers();
+        refreshGenerationViews();
+    }
+
+    function syncGenerationSetPickers() {
+        if (!state.sets.length) return;
+        for (const tab of ["txt2img", "img2img"]) {
+            const row = document.getElementById(tab + "_styles_row");
+            if (!row) continue;
+            const id = "style-order-manager-" + tab + "-picker";
+            let picker = document.getElementById(id);
+            if (!picker) {
+                picker = document.createElement("div");
+                picker.id = id;
+                picker.className = "style-generation-set-picker";
+                picker.innerHTML = '<label><span></span><select></select></label><small role="status"></small>';
+                picker.querySelector("select").addEventListener("change", event => {
+                    const target = event.target.value;
+                    picker.querySelector("small").textContent = "";
+                    setGenerationView(target);
+                });
+            }
+            if (row.previousElementSibling !== picker) row.before(picker);
+            const select = picker.querySelector("select");
+            const supportsAll = !!document.getElementById("som_" + tab + "_style_view")?.classList.contains("som-independent-view");
+            if (supportsAll) bindNativeStyleRefresh(tab);
+            const active = state.generationSet;
+            const version = JSON.stringify([state.setsRevision, state.language, supportsAll]);
+            if (select.dataset.version !== version) {
+                picker.querySelector("label span").textContent = t("setPicker");
+                select.innerHTML = (supportsAll ? `<option value="">${t("allSets")}</option>` : "")
+                    + destinationOptions(state.sets, active);
+                select.dataset.version = version;
+                picker.querySelector("small").textContent = "";
+            }
+            if (select.value !== active) select.value = active;
+            const disabled = state.busy || !supportsAll;
+            if (select.disabled !== disabled) select.disabled = disabled;
+        }
+    }
+
+    function renderSets() {
+        syncGenerationSetPickers();
+        const panel = root.querySelector("#style-set-panel");
+        if (!panel) return;
+        panel.hidden = !state.sets.length;
+        if (panel.hidden) return;
+        const disabled = state.busy ? "disabled" : "";
+        const others = state.sets.filter(set => set.id !== state.activeSet);
+        if (!others.some(set => set.id === state.destination)) state.destination = others[0]?.id || "";
+        panel.innerHTML = `<div class="style-editor-toolbar style-set-bar">
+            <strong>${t("sets")}</strong>
+            ${state.sets.map(setTabMarkup).join("")}
+            <button type="button" data-set-action="create" ${disabled}>＋ ${t("newSet")}</button>
+            <button type="button" data-set-action="rename" ${disabled}>${t("renameSet")}</button>
+            ${others.length ? `<button type="button" data-set-action="order" aria-pressed="${state.orderingSets}" ${disabled}>${t(state.orderingSets ? "finishOrder" : "orderSets")}</button>` : ""}
+            ${others.length ? `<button type="button" data-set-action="select" aria-pressed="${state.selecting}" ${disabled}>${t(state.selecting ? "finishSelect" : "selectRows")}</button>` : ""}
+        </div>`;
+        if (!state.selecting || !others.length) return;
+        const blocked = state.busy || !state.selected.size ? "disabled" : "";
+        panel.insertAdjacentHTML("beforeend", `<div class="style-editor-toolbar style-set-bar">
+            <span>${t("selectedRows", {count: state.selected.size})}</span>
+            <label>${t("destination")} <select data-destination ${disabled}>
+                ${destinationOptions(others, state.destination)}
+            </select></label>
+            <button type="button" data-set-action="move" ${blocked}>${t("moveSet")}</button>
+            <button type="button" data-set-action="copy" ${blocked}>${t("copySet")}</button>
+        </div>`);
+    }
+
+    function dirtySwitchChoice() {
+        const dialog = document.createElement("dialog");
+        dialog.className = "style-set-dialog";
+        dialog.innerHTML = `<form method="dialog"><p>${t("dirtySwitch")}</p>
+            <div class="style-editor-toolbar"><button value="save">${t("saveSwitch")}</button>
+            <button value="discard">${t("discardSwitch")}</button>
+            <button value="cancel" autofocus>${t("cancel")}</button></div></form>`;
+        root.append(dialog);
+        return new Promise(resolve => {
+            dialog.addEventListener("close", () => {
+                const choice = dialog.returnValue;
+                dialog.remove();
+                resolve(choice);
+            }, { once: true });
+            dialog.showModal();
+        });
+    }
+
+    async function setAction(action, target, cardIndex = null) {
+        if (state.busy) return;
+        if (action === "switch" && target === state.activeSet) return;
+        if (action === "order") {
+            state.orderingSets = !state.orderingSets;
+            renderSets();
+            return;
+        }
+        if (action === "select") {
+            state.selecting = !state.selecting;
+            state.selected.clear();
+            render();
+            return;
+        }
+        const transfer = action === "move" || action === "copy";
+        const payload = {
+            action, target, revision: state.revision, sets_revision: state.setsRevision,
+            backup_folder: currentBackupFolder(),
+            backup_count: Math.min(100, Math.max(1, Number(root.querySelector("#style-editor-backup-count").value) || 10)),
+            backup_enabled: root.querySelector("#style-editor-backup-enabled").checked,
+        };
+        setBusy(true);
+        try {
+            if (action === "create" || action === "rename" || (transfer && cardIndex !== null && !target)) {
+                const active = state.sets.find(set => set.id === state.activeSet);
+                let number = state.sets.length + 1;
+                const names = new Set(state.sets.map(setLabel));
+                while (names.has(t("setBase") + number)) number++;
+                const suggested = action === "rename" ? setLabel(active) : t("setBase") + number;
+                payload.name = window.prompt(t("setName"), suggested)?.trim();
+                if (!payload.name) return;
+            }
+            if (state.dirty && action !== "rename") {
+                if (transfer) {
+                    if (!window.confirm(t("saveTransfer"))) return;
+                    payload.draft = state.styles;
+                } else {
+                    const choice = await dirtySwitchChoice();
+                    if (choice === "save") payload.draft = state.styles;
+                    else if (choice !== "discard") return;
+                }
+            }
+            if (transfer) {
+                payload.target = cardIndex === null ? state.destination : target || null;
+                payload.indices = cardIndex === null
+                    ? state.styles.flatMap((row, i) => state.selected.has(row.id) ? [i] : [])
+                    : [cardIndex];
+                payload.names = {};
+            }
+            let data;
+            for (;;) {
+                data = await request("/sets", {method: "POST", body: JSON.stringify(payload)});
+                if (!data.conflicts) break;
+                for (const conflict of data.conflicts) {
+                    const name = window.prompt(t("collision", {name: conflict.name}), conflict.suggested);
+                    if (name === null) return;
+                    payload.names[conflict.index] = name.trim() ? name : null;
+                }
+            }
+            readSets(data);
+            if (cardIndex !== null) {
+                const row = state.styles[cardIndex];
+                if (data.transferred && action === "move") {
+                    state.styles.splice(cardIndex, 1);
+                    state.selected.delete(row.id);
+                    state.expanded.delete(row.id);
+                } else if (data.transferred) {
+                    row.destination = data.destination || target;
+                    row.copiedTo = setLabel(state.sets.find(set => set.id === row.destination));
+                }
+                state.revision = data.revision;
+                state.dirty = false;
+            } else if (action !== "rename") {
+                state.styles = data.styles.map(makeStyle);
+                state.revision = data.revision;
+                state.selected.clear();
+                state.expanded.clear();
+                state.dirty = false;
+                if (!transfer) {
+                    state.selecting = false;
+                    state.query = "";
+                    root.querySelector("#style-editor-search").value = "";
+                }
+            }
+            render();
+            const name = setLabel(state.sets.find(set => set.id === (transfer ? (data.destination || payload.target) : state.activeSet)));
+            let message = transfer ? t("transferred", {name, count: data.transferred}) : t("setReady", {name});
+            if (data.refresh) {
+                const refreshed = !data.restart_required && refreshForgeStyleControls();
+                message += t(data.restart_required ? "restartNeeded" : refreshed ? "stylesRefreshed" : "stylesRefreshManual");
+                await loadBackups();
+            } else {
+                refreshGenerationViews();
+            }
+            showCommittedStatus(message, data);
+        } catch (error) {
+            setStatus(error.message, "error");
+        } finally {
+            setBusy(false);
+            updateSummary();
+        }
+    }
+
     function bindEvents() {
+        const panel = root.querySelector("#style-set-panel");
+        panel.addEventListener("click", event => {
+            const button = event.target.closest("button");
+            if (!button) return;
+            if (button.dataset.orderId) {
+                const from = state.sets.findIndex(set => set.id === button.dataset.orderId);
+                reorderSet(button.dataset.orderId, from + Number(button.dataset.step));
+            } else if (!state.orderingSets || !button.dataset.setId) {
+                setAction(button.dataset.setAction || "switch", button.dataset.setId);
+            }
+        });
+        let draggedSet = null;
+        panel.addEventListener("dragstart", event => {
+            const tab = event.target.closest("[data-set-id]");
+            if (!tab || state.busy) return;
+            draggedSet = tab.dataset.setId;
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", draggedSet);
+        });
+        function clearDropMarker() {
+            panel.querySelectorAll("[data-drop-side]").forEach(tab => delete tab.dataset.dropSide);
+        }
+        panel.addEventListener("dragover", event => {
+            const tab = event.target.closest("[data-set-id]");
+            clearDropMarker();
+            if (!draggedSet || !tab || tab.dataset.setId === draggedSet) return;
+            event.preventDefault();
+            const bounds = tab.getBoundingClientRect();
+            tab.dataset.dropSide = event.clientX < bounds.left + bounds.width / 2 ? "before" : "after";
+        });
+        panel.addEventListener("drop", event => {
+            const tab = event.target.closest("[data-set-id]");
+            if (!draggedSet || !tab || !tab.dataset.dropSide) return;
+            event.preventDefault();
+            const others = state.sets.filter(set => set.id !== draggedSet);
+            const position = others.findIndex(set => set.id === tab.dataset.setId);
+            const after = tab.dataset.dropSide === "after";
+            clearDropMarker();
+            reorderSet(draggedSet, position + Number(after));
+            draggedSet = null;
+        });
+        panel.addEventListener("dragend", () => { draggedSet = null; clearDropMarker(); });
+        panel.addEventListener("change", event => {
+            if (event.target.matches("[data-destination]")) state.destination = event.target.value;
+        });
         const list = root.querySelector("#style-editor-list");
         root.querySelector("#style-editor-search").addEventListener("input", (event) => {
             state.query = event.target.value;
@@ -826,6 +1227,21 @@
         root.querySelector("#style-editor-backup-select").addEventListener("change", updateRestoreButton);
         root.querySelector("#style-editor-restore").addEventListener("click", restoreBackup);
 
+        list.addEventListener("change", event => {
+            if (state.busy) return;
+            if (event.target.matches("[data-card-destination]")) {
+                const row = state.styles[Number(event.target.closest(".style-editor-card").dataset.index)];
+                row.destination = event.target.value;
+                row.copiedTo = "";
+                event.target.closest(".style-card-transfer").querySelector('[role="status"]').textContent = "";
+                return;
+            }
+            if (!event.target.matches("[data-pick-style]")) return;
+            const id = event.target.closest(".style-editor-card").dataset.id;
+            if (event.target.checked) state.selected.add(id);
+            else state.selected.delete(id);
+            renderSets();
+        });
         list.addEventListener("input", (event) => {
             if (state.busy) return;
             const field = event.target.dataset.field;
@@ -845,11 +1261,25 @@
             const index = Number(card.dataset.index);
             const style = state.styles[index];
             if (!style) return;
+            if (event.target.closest(".style-editor-name")) return;
             const actionButton = event.target.closest("[data-action]")
                 || event.target.closest(".style-editor-card-heading")?.querySelector('[data-action="toggle"]');
             if (!actionButton) return;
             const action = actionButton.dataset.action;
 
+            if (action === "edit-name") {
+                state.expanded.add(style.id);
+                render();
+                const input = list.querySelector(`.style-editor-card[data-index="${index}"] .style-editor-name`);
+                input.focus();
+                input.select();
+                return;
+            }
+            if (action === "set-move" || action === "set-copy") {
+                const destination = card.querySelector("[data-card-destination]").value;
+                await setAction(action === "set-move" ? "move" : "copy", destination, index);
+                return;
+            }
             if (action === "save") {
                 await saveStyles();
                 return;
@@ -857,6 +1287,7 @@
             if (action === "delete") {
                 if (!window.confirm(t("deleteConfirm", { name: style.name }))) return;
                 state.styles.splice(index, 1);
+                state.selected.delete(style.id);
                 state.expanded.delete(style.id);
                 markDirty();
                 render();
@@ -943,6 +1374,7 @@
                     <span id="style-editor-dirty">Saved</span>
                 </div>
             </div>
+            <div id="style-set-panel" hidden></div>
             <div class="style-editor-toolbar">
                 <label id="style-editor-search-label" class="style-editor-search-label" for="style-editor-search"></label>
                 <input id="style-editor-search" type="search" autocomplete="off">
@@ -984,7 +1416,11 @@
 
     function initialize() {
         const candidate = document.getElementById(APP_ID);
-        if (!candidate || candidate.dataset.ready === "true") return;
+        if (!candidate) return;
+        if (candidate.dataset.ready === "true") {
+            syncGenerationSetPickers();
+            return;
+        }
         root = candidate;
         root.dataset.ready = "true";
         buildUi();

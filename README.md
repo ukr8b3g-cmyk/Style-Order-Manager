@@ -4,11 +4,17 @@
 
 ![Style Order Manager tab in the WebUI](docs/images/extensions-tab.png)
 
-A compact style order manager for Forge Neo and compatible Automatic1111-style WebUI forks. It manages `styles.csv` with a focus on drag-and-drop reordering.
+A compact style order manager for Forge Neo and compatible Automatic1111-style WebUI forks. It groups prompt styles into named sets and keeps drag-and-drop reordering in a compact editor.
 
 Style Order Manager was created around one simple idea: keep each style on a compact, easy-to-scan single line so reordering a large `styles.csv` stays quick and comfortable. It is intentionally lightweight and includes the minimum practical features—search, edit, add, delete, save, backup, and restore—without trying to be an advanced style-management suite.
 
 It was also created because a large `styles.csv` becomes difficult to understand and maintain when edited directly in a text editor. This focused UI keeps the order and contents easy to scan without becoming a feature-heavy editor.
+
+## v1.1.0 — Style sets and compact editing
+
+- Name and reorder sets, and move or copy styles directly from their cards.
+- Forge Neo's generation tabs open with **All** sets. Filtering keeps the styles you already selected, and changing the set in the manager keeps the generation filter in place.
+- Edit names in the card header, distinguish Copy and Paste by color, and continue editing an open card after saving.
 
 ## v1.0.0 — backup fixes (2026-10-25)
 
@@ -27,7 +33,7 @@ It was also created because a large `styles.csv` becomes difficult to understand
 - Drag-and-drop style reordering
 - Search, add, delete, and edit `name`, `prompt`, and `negative_prompt`
 - Compact one-line cards with move buttons, drag handles, and a dedicated expand triangle
-- Copy and paste controls shown only in the expanded prompt editor
+- Color-coded Copy and Paste controls in the expanded prompt editor
 - Unsaved-change indicator and explicit Save action
 - Automatic backup before saving plus a manual **Back up now** action
 - Backup list and restore action
@@ -64,9 +70,10 @@ Restart the WebUI after installation.
 ## Usage
 
 1. Open the **Style Order Manager** tab.
-2. Drag the `☷` handle to reorder styles.
-3. Click a card to inspect or edit its full contents.
-4. Press **Save** to write the new order and edits to `styles.csv`.
+2. Use the **Style sets** bar to create, rename, reorder, or switch sets. Your existing CSV starts in **Set 1**.
+3. Drag the `☷` handle to reorder styles. Expand a card to edit prompts or to move or copy the style to another set. Use the pencil beside the name to edit it in the header.
+4. Press **Save** to store the current set's order and edits. The current set is stored in `styles.csv`; other sets and their order are stored in `styles.csv.sets.json` alongside it.
+5. In Forge Neo, use **Style set** above the txt2img or img2img Styles list to filter available styles. **All** shows every set, and previously selected styles remain selected when you change the filter.
 
 The CSV header is preserved as `name,prompt,negative_prompt`.
 
@@ -104,7 +111,7 @@ Ordering uses the creation timestamp in the name, rather than the copied CSV's m
 
 ### Authentication and subpaths
 
-All seven extension endpoints follow the host's existing authentication. In UI mode they reuse Gradio's `/login_check` dependency, including session-cookie variants and Gradio 4 external authentication. In API-only mode they reuse the host `/sdapi/v1/options` dependencies, including `--api-auth` Basic authentication. UI sessions follow Gradio authentication even when the host has separate API credentials. Without host authentication, the extension follows the host's unauthenticated mode. An unknown host authentication contract disables the extension endpoints instead of exposing them.
+The extension endpoints follow the host's existing authentication. In UI mode they reuse Gradio's `/login_check` dependency, including session-cookie variants and Gradio 4 external authentication. In API-only mode they reuse the host `/sdapi/v1/options` dependencies, including `--api-auth` Basic authentication. UI sessions follow Gradio authentication even when the host has separate API credentials. Without host authentication, the extension follows the host's unauthenticated mode. An unknown host authentication contract disables the extension endpoints instead of exposing them.
 
 No credentials, authentication settings, or network settings are changed by the extension. Frontend requests use Gradio's configured root (with a pathname fallback) for both root URLs and `--subpath` deployments. A proxy still needs to forward the extension paths and login cookies, as it does for the host UI.
 

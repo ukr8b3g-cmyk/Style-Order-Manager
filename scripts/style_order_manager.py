@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+import copy
 import csv
 import hashlib
+import inspect
 import io
+import json
 import os
 import re
 import shutil
 import tempfile
 import threading
+from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 import gradio as gr
 from fastapi import APIRouter, Body, Depends, FastAPI
 from fastapi.responses import JSONResponse
+from gradio.context import Context
 from starlette.concurrency import run_in_threadpool
 
 from modules import script_callbacks, shared
@@ -176,6 +182,180 @@ def _normalise_styles(raw_styles) -> list[dict[str, str]]:
     return styles
 
 
+def _catalog_path(path):
+    return path.with_name(path.name + ".sets.json")
+
+
+def _store_json(path, value):
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=".style-sets-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def _catalog(path):
+    catalog_path = _catalog_path(path)
+    try:
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"active": "first", "version": None, "sets": {"first": {"name": None}}}
+    # A crash between CSV replacement and catalog commit is resolved on the next access.
+    if "pending" in catalog:
+        pending = catalog.pop("pending")
+        revision = _revision(path)
+        if revision == pending["after"]:
+            catalog = pending["catalog"]
+        elif revision != pending["before"]:
+            raise ValueError(f"CSV changed during interrupted set switch. Preserve both files for recovery: {catalog_path}")
+        _store_json(catalog_path, catalog)
+    return catalog
+
+
+def _check_catalog(catalog, payload):
+    if catalog["version"] != payload.get("sets_revision"):
+        raise RevisionConflict("Style sets changed. Reload before continuing.")
+
+
+def _set_summary(catalog):
+    return {
+        "active_set": catalog["active"], "sets_revision": catalog["version"],
+        "sets": [{"id": key, "name": item["name"]} for key, item in catalog["sets"].items()],
+    }
+
+
+def _commit_set_change(path, original, catalog, snapshot, rows, payload):
+    catalog["version"] = uuid4().hex
+    catalog_path = _catalog_path(path)
+    if rows == snapshot["styles"]:
+        _check_revision(path, snapshot["revision"])
+        _store_json(catalog_path, catalog)
+        return snapshot["revision"], None, None
+
+    backup = None
+    count = int(payload.get("backup_count", 10))
+    if not 1 <= count <= 100:
+        raise ValueError("backup_count must be between 1 and 100")
+    folder = _resolve_backup_dir(path, payload.get("backup_folder"))
+    with tempfile.TemporaryDirectory(dir=path.parent, prefix=".style-sets-") as directory:
+        staged = Path(directory) / "styles.csv"
+        revision = _write_styles(staged, rows)
+        if path.is_file() and payload.get("backup_enabled", True):
+            backup = _create_backup(path, folder)
+        _check_revision(path, snapshot["revision"])
+        pending = {"before": snapshot["revision"], "after": revision, "catalog": catalog}
+        _store_json(catalog_path, {**original, "pending": pending})
+        try:
+            _check_revision(path, snapshot["revision"])
+            os.replace(staged, path)
+        except (OSError, RevisionConflict):
+            _store_json(catalog_path, original)
+            raise
+        catalog_warning = None
+        try:
+            _store_json(catalog_path, catalog)
+        except OSError as error:
+            # The durable pending record and installed CSV already identify the committed set.
+            catalog_warning = str(error)
+    warning = _cleanup_backups_warning(folder, path, count, backup) if backup else None
+    return revision, warning, catalog_warning
+
+
+def _transfer_rows(source, destination, payload):
+    indices = payload.get("indices")
+    if not isinstance(indices, list) or not indices or any(
+        type(i) is not int or not 0 <= i < len(source) for i in indices
+    ):
+        raise ValueError("Invalid selection")
+    decisions = payload.get("names", {})
+    if not isinstance(decisions, dict):
+        raise ValueError("Invalid names")
+    used = {_style_name_key(row["name"]) for row in destination}
+    moved = set()
+    conflicts = []
+    for index in sorted(set(indices)):
+        row = source[index]
+        name = decisions.get(str(index), row["name"])
+        if name is None:
+            continue
+        if not isinstance(name, str) or not name.strip() or "\x00" in name:
+            raise ValueError("Invalid style name")
+        key = _style_name_key(name)
+        if key in used:
+            conflicts.append({"index": index, "name": name, "suggested": _next_style_name(name, list(used))})
+            continue
+        used.add(key)
+        moved.add(index)
+        destination.append({**row, "name": name})
+    return moved, conflicts
+
+
+def _change_set(path, payload):
+    original = _catalog(path)
+    _check_catalog(original, payload)
+    catalog = copy.deepcopy(original)
+    sets = catalog["sets"]
+    active = catalog["active"]
+    action = payload.get("action")
+    target = payload.get("target")
+    if action == "reorder":
+        order = payload.get("order")
+        if (not isinstance(order, list) or len(order) != len(sets)
+                or not all(isinstance(key, str) for key in order) or set(order) != set(sets)):
+            raise ValueError("Invalid set order")
+        if order != list(sets):
+            catalog["sets"] = {key: sets[key] for key in order}
+            catalog["version"] = uuid4().hex
+            _store_json(_catalog_path(path), catalog)
+        return _set_summary(catalog)
+    snapshot = _styles_snapshot(path)
+    rows = snapshot["styles"]
+    if action in ("move", "copy") or "draft" in payload:
+        _check_revision(path, payload.get("revision"))
+    if "draft" in payload:
+        rows = _normalise_styles(payload["draft"])
+    new_destination = action in ("move", "copy") and target is None and "name" in payload
+    if action in ("create", "rename") or new_destination:
+        name = payload.get("name")
+        if not isinstance(name, str) or not name.strip() or "\x00" in name:
+            raise ValueError("Invalid set name")
+        existing_names = {label.casefold() for key, item in sets.items()
+                          if action != "rename" or key != active
+                          for label in ([item["name"]] if item["name"] else ["Set 1", "セット1"])}
+        if name.strip().casefold() in existing_names:
+            raise ValueError("Set name already exists")
+        if action == "rename":
+            sets[active]["name"] = name.strip()
+        else:
+            target = uuid4().hex
+            sets[target] = {"name": name.strip(), "styles": []}
+    if action in ("switch", "create", "copy", "move"):
+        if not isinstance(target, str) or target not in sets or target == active:
+            raise ValueError("Invalid destination set")
+        if action in ("switch", "create"):
+            sets[active]["styles"] = rows
+            rows = sets[target].pop("styles")
+            catalog["active"] = target
+        else:
+            moved, conflicts = _transfer_rows(rows, sets[target]["styles"], payload)
+            if conflicts:
+                return {"conflicts": conflicts}
+            if action == "move":
+                rows = [row for i, row in enumerate(rows) if i not in moved]
+    elif action != "rename":
+        raise ValueError("Invalid set action")
+    revision, warning, catalog_warning = _commit_set_change(path, original, catalog, snapshot, rows, payload)
+    refresh = action in ("switch", "create") or revision != snapshot["revision"]
+    reload_warning = _reload_host_styles() if refresh else None
+    return {**_set_summary(catalog), "styles": rows, "revision": revision,
+            "refresh": refresh, "restart_required": bool(reload_warning), "cleanup_warning": warning,
+            "catalog_warning": catalog_warning, "destination": target, "transferred": len(moved) if action in ("move", "copy") else 0}
+
+
 def _backup_created(style_path: Path, name: str) -> datetime | None:
     # Exact historical formats only; the prefix alone is not proof of a backup.
     match = re.fullmatch(
@@ -311,10 +491,115 @@ def _error(message: str, status_code: int = 400):
     return JSONResponse({"error": message}, status_code=status_code)
 
 
+class _GenerationStyles(dict):
+    """Keep cross-set lookups available without adding entries to Forge's CSV writers."""
+
+    def __missing__(self, key):
+        return self.generation_styles[key]
+
+    def get(self, key, default=None):
+        if key in self:
+            return super().get(key)
+        return self.generation_styles.get(key, default)
+
+
+def _all_generation_choices(db, catalog, view_set=None, selected=()):
+    # The active set already lives in the host. Preserve other configured CSVs too.
+    active = catalog["active"]
+    entries = []
+    primary = str(db.default_path)
+    for key, item in catalog["sets"].items():
+        if key == active:
+            rows = [row for row in db.styles.values() if str(row.path) == primary]
+        else:
+            rows = [db.no_style._replace(name=row["name"], prompt=row["prompt"], negative_prompt=row["negative_prompt"])
+                    for row in item["styles"] if not row["name"].startswith("#")]
+        entries.extend((key, item["name"] or "Set 1", row) for row in rows)
+    entries.extend((None, Path(row.path or primary).name, row) for row in db.styles.values()
+                   if str(row.path) != primary)
+
+    counts = Counter(row.name for _, _, row in entries)
+    choices = []
+    virtual = {}
+    active_values = {}
+    for key, label, row in entries:
+        name = row.name
+        value = name
+        if key is not None:
+            value = f"som-set/{key}/{name}"
+            while value in counts or value in virtual:
+                value = "/" + value
+            virtual[value] = row
+            if key == active:
+                active_values[name] = value
+        # Gradio needs selected values in choices to retain chips from other sets.
+        if view_set is None or key in (view_set, None) or value in selected or (key == active and name in selected):
+            choices.append((name if counts[name] == 1 else f"{name}  [{label}]", value))
+
+    if not isinstance(db.styles, _GenerationStyles):
+        lookup = _GenerationStyles(db.styles)
+        lookup.generation_styles = virtual
+        lookup.active_values = active_values
+        db.styles = lookup
+    else:
+        db.styles.generation_styles = virtual
+        db.styles.active_values = active_values
+    return choices
+
+
+def _generation_refresh(selected, view_request):
+    with SAVE_LOCK:
+        db = shared.prompt_styles
+        db.reload()
+        catalog = _catalog(_style_path())
+        view_set = view_request.partition("/")[0]
+        if view_set not in catalog["sets"]:
+            view_set = catalog["active"] if view_set == "active" else None
+        choices = _all_generation_choices(db, catalog, view_set, set(selected or []))
+        valid = {value for _, value in choices}
+        kept = []
+        for value in selected or []:
+            if value not in valid:
+                value = getattr(db.styles, "active_values", {}).get(value)
+            if value in valid:
+                kept.append(value)
+        update = gr.update(choices=choices)
+        if selected:
+            update["value"] = kept
+        return update, gr.update(choices=list(db.styles))
+
+
+_generation_dropdowns = {}
+
+
+def _generation_component(component, **kwargs):
+    if Context.root_block is None:
+        return
+    elem_id = getattr(component, "elem_id", None)
+    for tab in ("txt2img", "img2img"):
+        if elem_id == f"{tab}_styles":
+            with SAVE_LOCK:
+                component.choices = _all_generation_choices(shared.prompt_styles, _catalog(_style_path()))
+            _generation_dropdowns[tab] = component
+        elif elem_id == f"{tab}_styles_edit_select" and tab in _generation_dropdowns:
+            dropdown = _generation_dropdowns.pop(tab)
+            # One change event per tab serializes view changes (including a quick change back).
+            request = gr.Textbox(visible=False, interactive=True, elem_id=f"som_{tab}_style_view",
+                                 elem_classes=["som-independent-view"])
+            refresh = request.change(fn=_generation_refresh, inputs=[dropdown, request], outputs=[dropdown, component],
+                                     show_progress=False, api_name=False)
+            # Gradio 3 calls this argument _js; Gradio 4 calls it js.
+            argument = "js" if "js" in inspect.signature(refresh.then).parameters else "_js"
+            notify = f'() => {{ document.dispatchEvent(new Event("som-{tab}-choices-ready")); return []; }}'
+            refresh.then(fn=None, **{argument: notify})
+
+
 def _reload_host_styles() -> str | None:
     try:
         if shared.prompt_styles is not None:
             shared.prompt_styles.reload()
+            if isinstance(getattr(shared.prompt_styles, "styles", None), _GenerationStyles):
+                _all_generation_choices(shared.prompt_styles, _catalog(_style_path()))
     except Exception as error:
         # The file was committed; do not invite a retry with a stale revision.
         return str(error)
@@ -350,12 +635,25 @@ def api_style_editor(demo: gr.Blocks | None, app: FastAPI):
         except ValueError as error:
             return _error(str(error), 400)
 
+    @router.post("/sets")
+    async def change_set(payload: dict = Body(...)):
+        try:
+            with SAVE_LOCK:
+                return _change_set(_style_path(), payload)
+        except RevisionConflict as error:
+            return _error(str(error), 409)
+        except (TypeError, ValueError) as error:
+            return _error(str(error), 400)
+        except OSError as error:
+            return _error(str(error), 500)
+
     @router.get("/styles")
     async def get_styles():
         style_path = _style_path()
         try:
             with SAVE_LOCK:
-                snapshot = _styles_snapshot(style_path)
+                sets = _set_summary(_catalog(style_path))
+                snapshot = {**_styles_snapshot(style_path), **sets}
         except FileNotFoundError as error:
             return _error(str(error), 404)
         except (OSError, ValueError) as error:
@@ -374,7 +672,8 @@ def api_style_editor(demo: gr.Blocks | None, app: FastAPI):
             with SAVE_LOCK:
                 if style_path.is_file() and shared.prompt_styles is not None:
                     shared.prompt_styles.reload()
-                snapshot = _styles_snapshot(style_path)
+                sets = _set_summary(_catalog(style_path))
+                snapshot = {**_styles_snapshot(style_path), **sets}
         except FileNotFoundError as error:
             return _error(str(error), 404)
         except (OSError, ValueError) as error:
@@ -448,6 +747,7 @@ def api_style_editor(demo: gr.Blocks | None, app: FastAPI):
         safety_backup_name = None
         try:
             with SAVE_LOCK:
+                _check_catalog(_catalog(style_path), payload)
                 _check_revision(style_path, payload.get("revision"))
                 backup_path = _selected_backup_path(backup_dir, style_path, payload.get("backup_name"))
                 _normalise_styles(_read_styles(backup_path))
@@ -496,6 +796,7 @@ def api_style_editor(demo: gr.Blocks | None, app: FastAPI):
         cleanup_warning = None
         try:
             with SAVE_LOCK:
+                _check_catalog(_catalog(style_path), payload)
                 _check_revision(style_path, payload.get("revision"))
                 if backup_enabled:
                     backup_path = _create_backup(style_path, backup_dir)
@@ -535,5 +836,6 @@ def on_ui_tabs():
     return [(style_editor_ui, TAB_TITLE, TAB_ID)]
 
 
+script_callbacks.on_after_component(_generation_component)
 script_callbacks.on_app_started(api_style_editor)
 script_callbacks.on_ui_tabs(on_ui_tabs)
