@@ -904,12 +904,14 @@
     let generationRequest = 0;
     const pendingGenerationViews = new Map();
 
-    function requestGenerationChoices(tab) {
+    function requestGenerationChoices(tab, nativeWrite = false) {
         const input = document.querySelector(`#som_${tab}_style_view textarea, #som_${tab}_style_view input`);
         const field = document.getElementById(tab + "_styles");
         if (!input || !field || !input.closest(".som-independent-view")) return false;
         if (pendingGenerationViews.has(tab)) {
-            pendingGenerationViews.set(tab, true);
+            // A queued manual refresh must still reload externally edited CSVs.
+            const queued = pendingGenerationViews.get(tab);
+            pendingGenerationViews.set(tab, queued === "reload" || !nativeWrite ? "reload" : "native");
             return true;
         }
         pendingGenerationViews.set(tab, false);
@@ -919,10 +921,10 @@
             const again = pendingGenerationViews.get(tab);
             pendingGenerationViews.delete(tab);
             field.inert = false;
-            if (again) requestGenerationChoices(tab);
+            if (again) requestGenerationChoices(tab, again === "native");
         }, {once: true});
         const view = state.generationSet || "all";
-        input.value = `${view}/${++generationRequest}`;
+        input.value = `${view}/${++generationRequest}${nativeWrite ? "/native" : ""}`;
         input.dispatchEvent(new Event("input", {bubbles: true}));
         return true;
     }
@@ -936,25 +938,16 @@
                 if (requestGenerationChoices(tab)) event.stopImmediatePropagation();
             }, true);
         }
-        const field = document.getElementById(tab + "_styles");
-        const dialog = document.getElementById(tab + "_styles_dialog");
-        if (!field || !dialog || field.dataset.somEditRefresh) return;
-        field.dataset.somEditRefresh = "true";
-        let edited = false;
-        dialog.addEventListener("click", event => {
-            const button = event.target.closest("button");
-            if (button && [tab + "_edit_style_save", tab + "_edit_style_delete"].includes(button.id)) edited = true;
-        });
-        field.addEventListener("focusin", () => {
-            if (edited) requestGenerationChoices(tab);
-            edited = false;
-        });
     }
 
-    function refreshGenerationViews() {
+    function refreshGenerationViews(nativeWrite = false) {
         for (const tab of ["txt2img", "img2img"]) {
-            requestGenerationChoices(tab);
+            requestGenerationChoices(tab, nativeWrite);
         }
+    }
+
+    function nativeStylesWritten() {
+        refreshGenerationViews(true);
     }
 
     function setGenerationView(setId) {
@@ -1423,6 +1416,7 @@
         }
         root = candidate;
         root.dataset.ready = "true";
+        document.addEventListener("som-native-styles-written", nativeStylesWritten);
         buildUi();
         reloadStyles(true);
         loadBackups();

@@ -10,6 +10,11 @@ Style Order Managerは、大量の`styles.csv`でも各スタイルをコンパ�
 
 スタイル数が多い`styles.csv`をテキストエディターで直接編集すると、順番や内容を把握しにくくなるため、この拡張機能を作成しました。多機能化せず、スタイルの順番と内容を見やすく確認できることに重点を置いています。
 
+## v1.1.1 — 生成画面のスタイル選択を修正
+
+- reForge の生成画面で、スタイル名に内部 ID が表示される問題を修正しました。同じ名前のスタイルはセット名で区別でき、選んだスタイルの正・負のプロンプトが適用されます。
+- 標準の鉛筆エディターで保存・削除すると、txt2img と img2img の候補が更新されます。各画面の絞り込みと、引き続き使える選択済みスタイルを維持します。
+
 ## v1.1.0 — スタイルセットとコンパクトな編集画面
 
 - 名前付きセットを作成・並べ替えできます。各カードから別のセットにスタイルを移動・コピーできます。
@@ -101,7 +106,7 @@ WebUIのプロンプト操作欄にある**鉛筆アイコン**を押すと、�
 styles_backups
 ```
 
-このフォルダは`styles.csv`と同じフォルダ内に作成されます。`styles.csv`がWebUIルートにある場合、実際の保存先は`<webui-directory>\styles_backups`です。
+このフォルダは`styles.csv`と同じフォルダ内に作成されます。`styles.csv`がWebUIルートにある場合、実際の保存先は`<webui-directory>\styles_backups`です。バックアップの対象は現在の`styles.csv`のみです。他のセットは`styles.csv.sets.json`に保存されます。
 
 リストア前には、現在の`styles.csv`を安全用バックアップとして保存します。復元内容はCSVと同じフォルダの一時ファイルへコピーし、検証後に一括置換します。コピー・置換が失敗した場合、元のCSVと作成済みの安全用バックアップを保持します。CSVがなくても、一覧を再読込して正当なバックアップを選べば復元できます。この場合は復元前のコピーを作りません。
 
@@ -120,7 +125,7 @@ styles_backups
 既存のホスト仮想環境で実行できます。Pythonテストは一時CSV・バックアップだけを使い、GPUバックエンドは読み込みません。
 
 ```powershell
-<webui-directory>\venv\Scripts\python.exe -B tests\test_style_order_manager.py
+<webui-directory>\venv\Scripts\python.exe -B -m unittest discover -s tests -v
 node --check javascript\style_order_manager.js
 ```
 

@@ -46,6 +46,86 @@ def gradio_host(auth=None):
 
 
 class AllGenerationStylesTests(unittest.TestCase):
+    def test_native_editor_refresh_is_chained_after_each_write(self):
+        def save_style():
+            pass
+
+        def delete_style():
+            pass
+
+        def refresh_styles():
+            return gr.update(choices=["native"]), gr.update(choices=["native"])
+
+        with gr.Blocks(analytics_enabled=False) as demo:
+            dropdown = gr.Dropdown(elem_id="txt2img_styles")
+            selection = gr.Dropdown(elem_id="txt2img_styles_edit_select")
+            for write in [save_style, delete_style]:
+                button = gr.Button()
+                som._native_edit_completion(button, "txt2img")
+                button.click(fn=write).then(refresh_styles, outputs=[dropdown, selection])
+        dependencies = demo.get_config_file()["dependencies"]
+        notifications = [dep for dep in dependencies if "som-native-styles-written" in (dep.get("js") or "")]
+        self.assertEqual(len(notifications), 2)
+        by_id = {dep.get("id", i): dep for i, dep in enumerate(dependencies)}
+        for notification, write in zip(notifications, [save_style, delete_style]):
+            refresh_id = notification["trigger_after"]
+            edit_id = by_id[refresh_id]["trigger_after"]
+            self.assertIs(demo.fns[edit_id].fn, write)
+            generation, editor = demo.fns[refresh_id].fn()
+            self.assertNotIn("choices", generation)
+            self.assertNotIn("value", generation)
+            self.assertEqual(editor["choices"], ["native"])
+
+    def test_native_save_and_delete_before_dropdown_refresh(self):
+        row = namedtuple("Row", "name prompt negative_prompt path")
+        old = row("A", "old positive", "old negative", "primary.csv")
+        db = types.SimpleNamespace(default_path="primary.csv", styles={"A": old},
+                                   no_style=row("None", "", "", None), reload=Mock())
+        catalog = {"active": "first", "sets": {"first": {"name": "One"},
+                   "second": {"name": "Two", "styles": [{"name": "A", "prompt": "other", "negative_prompt": "other neg"}]}}}
+        current, other = [value for _, value in som._all_generation_choices(db, catalog)]
+        selected = [other, current]
+        db.styles["A"] = old._replace(prompt="new positive", negative_prompt="new negative")
+        self.assertEqual([db.styles.get(v).prompt for v in selected], ["other", "new positive"])
+        self.assertEqual([db.styles[v].negative_prompt for v in selected], ["other neg", "new negative"])
+        with patch.object(shared, "prompt_styles", db, create=True), patch.object(som, "_style_path"), patch.object(som, "_catalog", return_value=catalog):
+            view, _ = som._generation_refresh(selected, "second/1/native")
+            self.assertEqual(view["value"], selected)
+            del db.styles["A"]
+            self.assertIs(db.styles.get(current, db.no_style), db.no_style)
+            with self.assertRaises(KeyError):
+                db.styles[current]
+            view, _ = som._generation_refresh(selected, "second/2/native")
+            self.assertEqual(view["value"], [other])
+            self.assertEqual([v for _, v in view["choices"]], [other])
+            db.reload.assert_not_called()
+
+    def test_plain_choices_apply_styles_and_keep_selections_across_filters(self):
+        row = namedtuple("Row", "name prompt negative_prompt path")
+        native = {"Same": row("Same", "first", "n1", "primary.csv"),
+                  "Same  [Other]": row("Same  [Other]", "literal", "", "primary.csv")}
+        db = types.SimpleNamespace(default_path="primary.csv", styles=native.copy(),
+                                   no_style=row("None", "", "", None), reload=Mock())
+        other = {"name": "Other", "styles": [
+            {"name": "Same", "prompt": "second", "negative_prompt": "n2"},
+            {"name": "Unique", "prompt": "third", "negative_prompt": "n3"}]}
+        catalog = {"active": "first", "sets": {"first": {"name": "Common"}, "second": other}}
+        with patch.object(som, "_PLAIN_STYLE_CHOICES", True), patch.object(shared, "prompt_styles", db, create=True), \
+                patch.object(som, "_style_path", return_value=Path("primary.csv")), patch.object(som, "_catalog", return_value=catalog):
+            options, _, keys = som._plain_generation_refresh([], "all/1", {})
+            self.assertTrue(all(isinstance(label, str) for label in options["choices"]))
+            self.assertEqual(len(keys), 4)
+            self.assertEqual(db.styles["Same  [Other]"].prompt, "literal")
+            selected = [label for label in options["choices"] if db.styles.get(label).negative_prompt in ("n2", "n3")]
+            self.assertEqual(len(selected), 2)
+            self.assertIn("Unique", selected)
+            other["name"] = "Renamed"
+            filtered, _, _ = som._plain_generation_refresh(selected, "first/2", keys)
+            self.assertEqual(filtered["value"], ["Same  [Renamed]", "Unique"])
+            self.assertTrue(set(filtered["value"]).issubset(filtered["choices"]))
+            self.assertEqual([db.styles.get(label).prompt for label in filtered["value"]], ["second", "third"])
+            self.assertEqual(dict(db.styles.items()), native)
+
     def test_order_duplicate_names_and_native_storage(self):
         row = namedtuple("Row", "name prompt negative_prompt path")
         native = {"Shared": row("Shared", "p1", "n1", "primary.csv"),

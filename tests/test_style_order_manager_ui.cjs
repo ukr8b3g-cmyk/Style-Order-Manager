@@ -86,6 +86,35 @@ const initialStyles = [
     }
 
     try {
+        await scenario("completed native edits refresh both generation tabs without focus", "", null, async ({ page }) => {
+            const result = await page.evaluate(() => {
+                const tabs = ["txt2img", "img2img"];
+                const requests = [];
+                for (const tab of tabs) {
+                    const field = document.createElement("div");
+                    field.id = tab + "_styles";
+                    const view = document.createElement("div");
+                    view.id = "som_" + tab + "_style_view";
+                    view.className = "som-independent-view";
+                    const input = document.createElement("textarea");
+                    input.addEventListener("input", () => requests.push([tab, input.value]));
+                    view.append(input);
+                    document.body.append(field, view);
+                }
+                document.dispatchEvent(new Event("som-native-styles-written"));
+                document.dispatchEvent(new Event("som-native-styles-written"));
+                const inFlight = requests.length;
+                for (let edit = 0; edit < 2; edit++) {
+                    for (const tab of tabs) document.dispatchEvent(new Event(`som-${tab}-choices-ready`));
+                }
+                return {inFlight, requests, enabled: tabs.every(tab => !document.getElementById(tab + "_styles").inert)};
+            });
+            assert.equal(result.inFlight, 2);
+            assert.deepEqual(result.requests.map(([tab]) => tab), ["txt2img", "img2img", "txt2img", "img2img"]);
+            assert.ok(result.requests.every(([, view]) => view.startsWith("all/") && view.endsWith("/native")));
+            assert.equal(result.enabled, true);
+        });
+
         await scenario("delayed save locks all row mutations and refreshes backups", "", null, async ({ page, apiCalls, delaySave, releaseSave }) => {
             await page.locator('[data-field="prompt"]').first().fill("edited before save");
             delaySave();

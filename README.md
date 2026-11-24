@@ -10,6 +10,11 @@ Style Order Manager was created around one simple idea: keep each style on a com
 
 It was also created because a large `styles.csv` becomes difficult to understand and maintain when edited directly in a text editor. This focused UI keeps the order and contents easy to scan without becoming a feature-heavy editor.
 
+## v1.1.1 — Generation style dropdown hotfix
+
+- The reForge generation dropdown now displays style names and distinguishes duplicates by set. Each selection applies its own positive and negative prompts.
+- Saving or deleting a style in the native pencil editor refreshes both txt2img and img2img while preserving the set filter and any still-valid selections.
+
 ## v1.1.0 — Style sets and compact editing
 
 - Name and reorder sets, and move or copy styles directly from their cards.
@@ -101,7 +106,7 @@ Automatic backups are enabled by default and retain 10 files. **Back up now** im
 styles_backups
 ```
 
-This folder is created next to `styles.csv`. If `styles.csv` is in the WebUI root, the resolved path is `<webui-directory>\styles_backups`.
+This folder is created next to `styles.csv`. If `styles.csv` is in the WebUI root, the resolved path is `<webui-directory>\styles_backups`. Each backup covers the current `styles.csv` only. Other sets are stored separately in `styles.csv.sets.json`.
 
 Before a restore, the current `styles.csv` is saved as a safety backup. Restore validates a temporary file beside the CSV and then atomically replaces the destination. A copy or replacement failure leaves the original CSV intact and keeps any completed safety backup. If the CSV is missing, reload the list and restore a valid backup; no pre-restore copy is needed.
 
@@ -120,7 +125,7 @@ No credentials, authentication settings, or network settings are changed by the 
 Use an existing compatible host virtual environment; the Python tests use only temporary CSVs/backups and never import the GPU backend:
 
 ```powershell
-<webui-directory>\venv\Scripts\python.exe -B tests\test_style_order_manager.py
+<webui-directory>\venv\Scripts\python.exe -B -m unittest discover -s tests -v
 node --check javascript\style_order_manager.js
 ```
 

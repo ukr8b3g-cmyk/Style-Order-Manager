@@ -13,6 +13,7 @@ import tempfile
 import threading
 from collections import Counter
 from datetime import datetime, timedelta
+from functools import wraps
 from pathlib import Path
 from uuid import uuid4
 
@@ -31,6 +32,8 @@ API_PREFIX = "/style-order-manager/v1"
 CSV_FIELDS = ("name", "prompt", "negative_prompt")
 BACKUP_FOLDER_NAME = "styles_backups"
 SAVE_LOCK = threading.Lock()
+# Gradio 3's multiselect uses the displayed string as its submitted value.
+_PLAIN_STYLE_CHOICES = gr.__version__.split(".")[0] == "3"
 
 
 def _style_path() -> Path:
@@ -495,12 +498,20 @@ class _GenerationStyles(dict):
     """Keep cross-set lookups available without adding entries to Forge's CSV writers."""
 
     def __missing__(self, key):
-        return self.generation_styles[key]
+        reference = self.generation_styles[key]
+        if isinstance(reference, str):
+            # The native pencil replaces or removes this row before its UI refresh.
+            row = dict.get(self, reference)
+            if row is None or str(row.path) != self.primary_path:
+                raise KeyError(key)
+            return row
+        return reference
 
     def get(self, key, default=None):
-        if key in self:
-            return super().get(key)
-        return self.generation_styles.get(key, default)
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
 
 def _all_generation_choices(db, catalog, view_set=None, selected=()):
@@ -519,38 +530,54 @@ def _all_generation_choices(db, catalog, view_set=None, selected=()):
                    if str(row.path) != primary)
 
     counts = Counter(row.name for _, _, row in entries)
+    reserved = set(counts)
+    labels = []
+    for _, set_name, row in entries:
+        label = row.name
+        if counts[label] > 1:
+            base = f"{label}  [{set_name}]"
+            label = base
+            number = 2
+            while label in reserved:
+                label = f"{base} ({number})"
+                number += 1
+            reserved.add(label)
+        labels.append(label)
+
     choices = []
     virtual = {}
     active_values = {}
-    for key, label, row in entries:
+    for (key, _, row), label in zip(entries, labels):
         name = row.name
         value = name
         if key is not None:
             value = f"som-set/{key}/{name}"
-            while value in counts or value in virtual:
+            while value in reserved or value in virtual:
                 value = "/" + value
-            virtual[value] = row
+            virtual[value] = name if key == active else row
             if key == active:
                 active_values[name] = value
+        if _PLAIN_STYLE_CHOICES and label != value:
+            # The native generation and Apply-styles callbacks receive these labels.
+            # Keep their lookups virtual so the CSV writer only sees native rows.
+            virtual[label] = virtual[value] if key is not None else row
         # Gradio needs selected values in choices to retain chips from other sets.
         if view_set is None or key in (view_set, None) or value in selected or (key == active and name in selected):
-            choices.append((name if counts[name] == 1 else f"{name}  [{label}]", value))
+            choices.append((label, value))
 
-    if not isinstance(db.styles, _GenerationStyles):
-        lookup = _GenerationStyles(db.styles)
-        lookup.generation_styles = virtual
-        lookup.active_values = active_values
-        db.styles = lookup
-    else:
-        db.styles.generation_styles = virtual
-        db.styles.active_values = active_values
+    lookup = db.styles if isinstance(db.styles, _GenerationStyles) else _GenerationStyles(db.styles)
+    lookup.primary_path = primary
+    lookup.generation_styles = virtual
+    lookup.active_values = active_values
+    db.styles = lookup
     return choices
 
 
 def _generation_refresh(selected, view_request):
     with SAVE_LOCK:
         db = shared.prompt_styles
-        db.reload()
+        if not view_request.endswith("/native"):
+            db.reload()
         catalog = _catalog(_style_path())
         view_set = view_request.partition("/")[0]
         if view_set not in catalog["sets"]:
@@ -569,7 +596,56 @@ def _generation_refresh(selected, view_request):
         return update, gr.update(choices=list(db.styles))
 
 
+def _plain_generation_refresh(selected, view_request, previous_keys):
+    # Each browser keeps the stable keys for the labels it was actually shown.
+    keys = [previous_keys.get(label, label) for label in selected or []]
+    update, editor = _generation_refresh(keys, view_request)
+    pairs = update["choices"]
+    label_to_key = dict(pairs)
+    update["choices"] = list(label_to_key)
+    if "value" in update:
+        key_to_label = {key: label for label, key in pairs}
+        update["value"] = [key_to_label[key] for key in update["value"]]
+    return update, editor, label_to_key
+
+
 _generation_dropdowns = {}
+
+
+def _native_edit_completion(button, tab):
+    # Forge registers button.click(write).then(refresh_styles) after building
+    # its controls. Extend just that chain, preserving its write and confirmation.
+    original_click = button.click
+
+    def register(*args, **kwargs):
+        dependency = original_click(*args, **kwargs)
+        if getattr(kwargs.get("fn"), "__name__", "") not in {"save_style", "delete_style"}:
+            return dependency
+        button.click = original_click
+        original_then = dependency.then
+
+        def follow(fn=None, *args, **options):
+            outputs = options.get("outputs") or []
+            if (args or getattr(fn, "__name__", "") != "refresh_styles" or not isinstance(outputs, (list, tuple))
+                    or [getattr(c, "elem_id", None) for c in outputs] != [f"{tab}_styles", f"{tab}_styles_edit_select"]):
+                return original_then(fn, *args, **options)
+
+            @wraps(fn)
+            def editor_choices():
+                # Keep the current chips and filtered choices until the normal
+                # per-tab refresh can reconcile both in one Gradio update.
+                _, editor_update = fn()
+                return gr.update(), editor_update
+
+            refreshed = original_then(editor_choices, **options)
+            js_arg = "js" if "js" in inspect.signature(refreshed.then).parameters else "_js"
+            refreshed.then(fn=None, api_name=False, **{js_arg: '() => { document.dispatchEvent(new Event("som-native-styles-written")); return []; }'})
+            return refreshed
+
+        dependency.then = follow
+        return dependency
+
+    button.click = register
 
 
 def _generation_component(component, **kwargs):
@@ -579,19 +655,29 @@ def _generation_component(component, **kwargs):
     for tab in ("txt2img", "img2img"):
         if elem_id == f"{tab}_styles":
             with SAVE_LOCK:
-                component.choices = _all_generation_choices(shared.prompt_styles, _catalog(_style_path()))
-            _generation_dropdowns[tab] = component
+                choices = _all_generation_choices(shared.prompt_styles, _catalog(_style_path()))
+            component.choices = [label for label, _ in choices] if _PLAIN_STYLE_CHOICES else choices
+            _generation_dropdowns[tab] = component, choices
         elif elem_id == f"{tab}_styles_edit_select" and tab in _generation_dropdowns:
-            dropdown = _generation_dropdowns.pop(tab)
+            dropdown, choices = _generation_dropdowns.pop(tab)
             # One change event per tab serializes view changes (including a quick change back).
             request = gr.Textbox(visible=False, interactive=True, elem_id=f"som_{tab}_style_view",
                                  elem_classes=["som-independent-view"])
-            refresh = request.change(fn=_generation_refresh, inputs=[dropdown, request], outputs=[dropdown, component],
+            inputs, outputs = [dropdown, request], [dropdown, component]
+            refresh_choices = _generation_refresh
+            if _PLAIN_STYLE_CHOICES:
+                keys = gr.State(dict(choices))
+                inputs.append(keys)
+                outputs.append(keys)
+                refresh_choices = _plain_generation_refresh
+            refresh = request.change(fn=refresh_choices, inputs=inputs, outputs=outputs,
                                      show_progress=False, api_name=False)
             # Gradio 3 calls this argument _js; Gradio 4 calls it js.
             argument = "js" if "js" in inspect.signature(refresh.then).parameters else "_js"
             notify = f'() => {{ document.dispatchEvent(new Event("som-{tab}-choices-ready")); return []; }}'
             refresh.then(fn=None, **{argument: notify})
+        elif elem_id in (f"{tab}_edit_style_save", f"{tab}_edit_style_delete"):
+            _native_edit_completion(component, tab)
 
 
 def _reload_host_styles() -> str | None:
