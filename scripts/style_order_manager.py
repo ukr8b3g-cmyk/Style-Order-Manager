@@ -667,6 +667,7 @@ def _generation_component(component, **kwargs):
             refresh_choices = _generation_refresh
             if _PLAIN_STYLE_CHOICES:
                 keys = gr.State(dict(choices))
+                dropdown._som_style_keys = keys._id
                 inputs.append(keys)
                 outputs.append(keys)
                 refresh_choices = _plain_generation_refresh
@@ -678,6 +679,45 @@ def _generation_component(component, **kwargs):
             refresh.then(fn=None, **{argument: notify})
         elif elem_id in (f"{tab}_edit_style_save", f"{tab}_edit_style_delete"):
             _native_edit_completion(component, tab)
+
+
+def _bind_plain_generation_keys(demo):
+    if demo is None or not _PLAIN_STYLE_CHOICES or getattr(demo, "_som_plain_generation_bound", False):
+        return
+
+    style_inputs = {
+        block_id: keys_id
+        for block_id, block in demo.blocks.items()
+        if (keys_id := getattr(block, "_som_style_keys", None)) is not None
+    }
+    callbacks = {"txt2img", "txt2img_upscale", "img2img", "materialize_styles"}
+    locations = {}
+    for index, (fn, dependency) in enumerate(zip(demo.fns, demo.dependencies)):
+        if getattr(inspect.unwrap(fn.fn), "__name__", None) not in callbacks:
+            continue
+        for position, block_id in enumerate(dependency["inputs"]):
+            if block_id in style_inputs:
+                locations[index] = position, style_inputs[block_id]
+                break
+    if not locations:
+        return
+
+    preprocess_data = demo.preprocess_data
+
+    def preprocess(fn_index, inputs, state):
+        prepared = preprocess_data(fn_index, inputs, state)
+        if fn_index in locations:
+            position, keys_id = locations[fn_index]
+            labels = prepared[position]
+            if labels is not None:
+                keys = state.get(keys_id, demo.blocks[keys_id].value)
+                prepared[position] = [keys.get(label, label) for label in labels]
+        return prepared
+
+    # Resolve per-session state before Gradio inserts Request arguments or an
+    # extension queues the native call. The frontend receives labels as before.
+    demo.preprocess_data = preprocess
+    demo._som_plain_generation_bound = True
 
 
 def _reload_host_styles() -> str | None:
@@ -711,6 +751,7 @@ def _host_auth_dependencies(demo: gr.Blocks | None, app: FastAPI) -> list:
 
 def api_style_editor(demo: gr.Blocks | None, app: FastAPI):
     router = APIRouter(prefix=API_PREFIX, dependencies=_host_auth_dependencies(demo, app))
+    _bind_plain_generation_keys(demo)
 
     @router.post("/next-name")
     async def next_name(payload: dict = Body(...)):

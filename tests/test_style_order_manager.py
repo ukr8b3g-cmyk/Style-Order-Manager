@@ -126,6 +126,39 @@ class AllGenerationStylesTests(unittest.TestCase):
             self.assertEqual([db.styles.get(label).prompt for label in filtered["value"]], ["second", "third"])
             self.assertEqual(dict(db.styles.items()), native)
 
+    def test_gradio3_stale_tab_submits_the_same_set_after_another_tab_renames_it(self):
+        row = namedtuple("Row", "name prompt negative_prompt path")
+        db = types.SimpleNamespace(default_path="primary.csv",
+                                   styles={"Same": row("Same", "first", "n1", "primary.csv")},
+                                   no_style=row("None", "", "", None), reload=Mock())
+        other = {"name": "Other", "styles": [{"name": "Same", "prompt": "second", "negative_prompt": "n2"}]}
+        catalog = {"active": "first", "sets": {"first": {"name": "Common"}, "second": other}}
+
+        def txt2img(prompt, labels):
+            return prompt, [(db.styles.get(key, db.no_style).prompt, db.styles.get(key, db.no_style).negative_prompt)
+                            for key in labels]
+
+        demo = types.SimpleNamespace(
+            blocks={1: types.SimpleNamespace(_som_style_keys=2), 2: types.SimpleNamespace(value={})},
+            fns=[types.SimpleNamespace(fn=txt2img)], dependencies=[{"inputs": [0, 1]}],
+            preprocess_data=lambda index, inputs, state: inputs.copy(),
+        )
+        with patch.object(som, "_PLAIN_STYLE_CHOICES", True), patch.object(shared, "prompt_styles", db, create=True), \
+                patch.object(som, "_style_path"), patch.object(som, "_catalog", return_value=catalog):
+            view, _, keys = som._plain_generation_refresh([], "all/1", {})
+            tab_a = {2: keys}
+            labels = ["Same  [Other]", "Same  [Common]"]
+            self.assertTrue(set(labels).issubset(view["choices"]))
+            other["name"] = "Renamed"
+            renamed, _, keys_b = som._plain_generation_refresh([], "all/2", {})
+            self.assertNotIn(labels[0], renamed["choices"])
+            som._bind_plain_generation_keys(demo)
+            a = demo.preprocess_data(0, ["base", labels], tab_a)
+            b = demo.preprocess_data(0, ["base", ["Same  [Renamed]"]], {2: keys_b})
+            self.assertEqual(txt2img(*a), ("base", [("second", "n2"), ("first", "n1")]))
+            self.assertEqual(txt2img(*b), ("base", [("second", "n2")]))
+            self.assertEqual(labels, ["Same  [Other]", "Same  [Common]"])
+
     def test_order_duplicate_names_and_native_storage(self):
         row = namedtuple("Row", "name prompt negative_prompt path")
         native = {"Shared": row("Shared", "p1", "n1", "primary.csv"),
